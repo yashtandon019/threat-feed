@@ -170,6 +170,7 @@ export async function upsert(env: Env, rec: SourceRecord, now: Date): Promise<st
 }
 
 export async function runIngest(env: Env, now = new Date()) {
+  const results: { source: string; records: number; changed: number; error?: string }[] = [];
   for (const adapter of ADAPTERS) {
     try {
       const row = await env.DB.prepare('SELECT cursor FROM cursors WHERE source = ?').bind(adapter.name).first<{ cursor: string }>();
@@ -184,9 +185,12 @@ export async function runIngest(env: Env, now = new Date()) {
           .run();
       }
       console.log(`ingest ${adapter.name}: ${records.length} records, ${changed} changed`);
+      results.push({ source: adapter.name, records: records.length, changed });
     } catch (err) {
       // The cursor is saved only after every record lands, so the next run retries from the same point.
       console.error(`ingest ${adapter.name} failed`, err);
+      results.push({ source: adapter.name, records: 0, changed: 0, error: String(err) });
     }
   }
+  return results;
 }

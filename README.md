@@ -87,15 +87,25 @@ npm run typecheck
 
 Needs Workers Paid ($5/month): free-plan cron jobs get 10 ms of CPU.
 
+Credentials are scoped to this repo instead of a global `wrangler login`: wrangler reads `.env` (git-ignored) from the project folder. Create an API token from the "Edit Cloudflare Workers" template, add Account > D1 > Edit, limit it to one account, then:
+
+```
+# .env
+CLOUDFLARE_API_TOKEN=...
+CLOUDFLARE_ACCOUNT_ID=...
+```
+
+Keep a `.dev.vars` file (even an empty one): when it is missing, `wrangler dev` passes `.env`, token included, to the local Worker.
+
 ```bash
-npx wrangler login                       # sign in with the personal account
-npx wrangler d1 create threat-feed       # copy database_id into wrangler.jsonc
+npx wrangler whoami                      # confirm it is the right account
+npx wrangler d1 create threat-feed       # copy database_id into wrangler.jsonc (first time only)
 npx wrangler d1 migrations apply DB --remote
-npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put ANTHROPIC_API_KEY   # optional, enables AI summaries
 npx wrangler deploy
 ```
 
-Set `SITE_URL` in `wrangler.jsonc` to the real domain first.
+`SITE_URL` in `wrangler.jsonc` is the public URL used in feed and API links; `.dev.vars` overrides it to localhost for local dev.
 
 ## Known limits (phase 1)
 

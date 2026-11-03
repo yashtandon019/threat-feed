@@ -9,14 +9,13 @@
     {
       "binding": "DB",
       "database_name": "threat-feed",
-      // Any value works locally. Replace with the id from `wrangler d1 create threat-feed` before deploying.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7116fa02-ff05-48db-b195-445ae6d0a84c",
       "migrations_dir": "migrations"
     }
   ],
   "vars": {
     "SUMMARY_MODEL": "claude-opus-5-5",
-    "SITE_URL": "http://localhost:8787"
+    "SITE_URL": "https://threat-feed.yashtandon019.workers.dev"
   },
   "observability": { "enabled": true }
 }

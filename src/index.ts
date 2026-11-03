@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
+import { bearerAuth } from 'hono/bearer-auth';
 import { cache } from 'hono/cache';
+import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters } from './db';
 import { atom, jsonFeed, rss } from './feeds';
@@ -13,6 +15,18 @@ import type { Env } from './types';
 const app = new Hono<{ Bindings: Env }>();
 
 app.all('/mcp', (c) => mcpFetch(c.env, c.req.raw));
+
+// Manual run of the cron job. Awaited in the request: waitUntil work is cut off ~30 s after the response.
+app.post(
+  '/admin/ingest',
+  async (c, next) => (c.env.INGEST_TOKEN ? next() : c.json({ error: 'disabled' }, 404)),
+  bearerAuth<{ Bindings: Env }>({ verifyToken: (token, c) => timingSafeEqual(token, c.env.INGEST_TOKEN!) }),
+  async (c) => {
+    const results = await runIngest(c.env);
+    await summarizeQueued(c.env);
+    return c.json({ results });
+  },
+);
 
 app.post('/api/v1/check', async (c) => {
   let input: CheckInput;

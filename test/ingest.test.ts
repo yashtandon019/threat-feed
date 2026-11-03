@@ -171,3 +171,13 @@ describe('outputs', () => {
     expect(mcp.status).toBe(200);
   });
 });
+
+describe('manual ingest endpoint', () => {
+  const post = (env: Env, auth?: string) =>
+    app.fetch(new Request('http://x/admin/ingest', { method: 'POST', headers: auth ? { authorization: auth } : {} }), env, createExecutionContext());
+  it('is off without a configured token and rejects wrong tokens', async () => {
+    expect((await post(E)).status).toBe(404);
+    expect((await post({ ...E, INGEST_TOKEN: 'right' })).status).toBe(401);
+    expect((await post({ ...E, INGEST_TOKEN: 'right' }, 'Bearer wrong')).status).toBe(401);
+  });
+});
