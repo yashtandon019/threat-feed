@@ -145,3 +145,7 @@ False positives, missing threats and wrong summaries: [open an issue](../../issu
 ## Data and licenses
 
 CISA KEV, FIRST EPSS, and OSV (OpenSSF Malicious Packages, Apache-2.0; GitHub Advisory Database, CC-BY-4.0). Attribution is in the site footer.
+
+## License
+
+Code: [MIT](LICENSE). Data keeps its source licenses (see above).

@@ -30,5 +30,6 @@
   "allowScripts": {
     "esbuild": false,
     "workerd": false
-  }
+  },
+  "license": "MIT"
 }
