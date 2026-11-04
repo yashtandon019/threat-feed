@@ -5,7 +5,8 @@ import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
-import { aboutPage, checkPage, FAVICON_SVG, feedPage, threatPage } from './html';
+import { secureHeaders } from 'hono/secure-headers';
+import { aboutPage, checkPage, FAVICON_SVG, feedPage, JS, threatPage } from './html';
 import { runIngest } from './ingest';
 import { mcpFetch } from './mcp';
 import type { Format } from './parsers';
@@ -13,6 +14,23 @@ import { summarizeQueued } from './summarize';
 import type { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Inline style attributes are used throughout html.ts, hence 'unsafe-inline' for styles only.
+app.use(
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ['https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  }),
+);
 
 // www.<site> redirects to the canonical SITE_URL host.
 app.use(async (c, next) => {
@@ -115,7 +133,9 @@ app.get('/favicon.svg', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image
 // Browsers still probe /favicon.ico; modern ones accept the SVG at that path.
 app.get('/favicon.ico', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=604800' }));
 
-app.get('/about', (c) => c.html(aboutPage(site(c.env))));
+app.get('/app.js', (c) => c.body(JS, 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' }));
+
+app.get('/about',(c) => c.html(aboutPage(site(c.env))));
 
 app.get('/t/:id', async (c) => {
   const t = await getThreat(c.env, c.req.param('id'));

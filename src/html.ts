@@ -142,7 +142,7 @@ footer.wrap{padding-bottom:40px;font-size:13px;color:var(--muted)}
 `;
 
 // Copy buttons, and filter forms that apply on change. Pages work without it.
-const JS = `document.querySelectorAll('[data-copy]').forEach(function(b){b.addEventListener('click',function(){var i=document.getElementById(b.dataset.copy);navigator.clipboard.writeText(i.value).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1500)})})});
+export const JS = `document.querySelectorAll('[data-copy]').forEach(function(b){b.addEventListener('click',function(){var i=document.getElementById(b.dataset.copy);navigator.clipboard.writeText(i.value).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1500)})})});
 document.querySelectorAll('form[data-auto] input').forEach(function(i){i.addEventListener('change',function(){i.form.submit()})});`;
 
 export const KIND_LABEL: Record<Kind, string> = {
@@ -218,7 +218,7 @@ ${body}
 <a href="https://osv.dev">OSV</a>, OpenSSF Malicious Packages (Apache-2.0) and the GitHub Advisory Database (CC-BY 4.0).
 Summaries marked AI are generated from those sources and can be wrong; check the linked sources.
 <a href="/about">About and privacy</a> · <a href="${reportUrl(site)}">Report a problem</a> · <a href="${site.repo}">Source code</a></p></footer>
-<script>${raw(JS)}</script></body></html>`;
+<script src="/app.js" defer></script></body></html>`;
 }
 
 export function feedPage(
