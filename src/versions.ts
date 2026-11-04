@@ -2,7 +2,7 @@ import * as pep440 from '@renovatebot/pep440';
 import semver from 'semver';
 import type { OsvRange } from './types';
 
-const SEMVER_ECOS = new Set(['npm', 'crates.io', 'Go', 'GitHub Actions']);
+const SEMVER_ECOS = new Set(['npm', 'crates.io', 'Go', 'GitHub Actions', 'Node.js']);
 
 /** Ecosystem-aware compare; null where we don't have a comparator (Maven, NuGet, RubyGems, Packagist). */
 export function compareVersions(ecosystem: string, a: string, b: string): number | null {

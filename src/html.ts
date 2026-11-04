@@ -2,7 +2,7 @@ import { html, raw } from 'hono/html';
 import type { Match } from './check';
 import type { Filters, getThreat, SourceStatus, ThreatOut } from './db';
 import type { Unresolved } from './parsers';
-import { ECOSYSTEMS, KINDS, type Kind } from './types';
+import { ALL_ECOSYSTEMS, KINDS, type Kind } from './types';
 
 type ThreatDetail = NonNullable<Awaited<ReturnType<typeof getThreat>>>;
 export interface Site {
@@ -23,9 +23,9 @@ const FONTS =
 
 // Palette and type from the design mockup; dark values follow prefers-color-scheme.
 const CSS = `
-:root{--ground:#F3F5F6;--panel:#FFFFFF;--ink:#101820;--inv-fg:#FFFFFF;--ink-2:#2D3740;--ink-3:#3E4A53;--muted:#56626C;--line:#D5DCE1;--line-2:#C3CCD3;--soft:#EEF1F3;--subtle:#F8FAFB;--dash:#A7B3BC;--link:#1D4ED8;--link-hover:#1E3A8A;--ok:#15803D;--act:#C2410C;--act-tint:#FFF4ED;--act-border:#F3C4A6;--act-label:#7C2D12;--act-text:#C2410C;--watch-bg:#FDF1D8;--watch:#8A5A00;--header:#101820;--code-bg:#101820;--code-fg:#E5EAEE;
+:root{--info-bg:#E6F0FB;--info:#1E4E8C;--ground:#F3F5F6;--panel:#FFFFFF;--ink:#101820;--inv-fg:#FFFFFF;--ink-2:#2D3740;--ink-3:#3E4A53;--muted:#56626C;--line:#D5DCE1;--line-2:#C3CCD3;--soft:#EEF1F3;--subtle:#F8FAFB;--dash:#A7B3BC;--link:#1D4ED8;--link-hover:#1E3A8A;--ok:#15803D;--act:#C2410C;--act-tint:#FFF4ED;--act-border:#F3C4A6;--act-label:#7C2D12;--act-text:#C2410C;--watch-bg:#FDF1D8;--watch:#8A5A00;--header:#101820;--code-bg:#101820;--code-fg:#E5EAEE;
 --display:'Archivo',system-ui,sans-serif;--body:'Public Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace}
-@media (prefers-color-scheme:dark){:root{--ground:#0D1316;--panel:#151C21;--ink:#E6ECEF;--inv-fg:#0D1316;--ink-2:#C5CFD5;--ink-3:#AEB9C0;--muted:#8E9BA4;--line:#26313A;--line-2:#3A4750;--soft:#1E272E;--subtle:#10171B;--dash:#4A5862;--link:#8AB4FF;--link-hover:#B9D1FF;--ok:#4ADE80;--act-tint:#2A1810;--act-border:#7C3A16;--act-label:#FDBA8C;--act-text:#FB923C;--watch-bg:#3A2C0E;--watch:#E8B04B;--header:#070B0D;--code-bg:#0A0F12;--code-fg:#D5DEE3;color-scheme:dark}}
+@media (prefers-color-scheme:dark){:root{--info-bg:#132A44;--info:#9CC3F0;--ground:#0D1316;--panel:#151C21;--ink:#E6ECEF;--inv-fg:#0D1316;--ink-2:#C5CFD5;--ink-3:#AEB9C0;--muted:#8E9BA4;--line:#26313A;--line-2:#3A4750;--soft:#1E272E;--subtle:#10171B;--dash:#4A5862;--link:#8AB4FF;--link-hover:#B9D1FF;--ok:#4ADE80;--act-tint:#2A1810;--act-border:#7C3A16;--act-label:#FDBA8C;--act-text:#FB923C;--watch-bg:#3A2C0E;--watch:#E8B04B;--header:#070B0D;--code-bg:#0A0F12;--code-fg:#D5DEE3;color-scheme:dark}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.5 var(--body)}
 a{color:var(--link)}a:hover{color:var(--link-hover)}
@@ -78,6 +78,7 @@ h2.sec{margin:0;font:700 20px var(--display);font-stretch:85%}
 .bar.t1{background:#C2410C;color:#fff}
 .bar.t2{background:var(--watch-bg);color:var(--watch);border-left:1px solid var(--watch)}
 .bar.t3{background:var(--soft);color:var(--muted)}
+.bar.t4{background:var(--info-bg);color:var(--info);border-left:1px dashed var(--info)}
 .card-body{flex:1 1 auto;min-width:0;padding:18px 22px;display:flex;flex-direction:column;gap:8px}
 .meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
 .kind{font-weight:600;letter-spacing:.04em;text-transform:uppercase}
@@ -94,7 +95,7 @@ h2.sec{margin:0;font:700 20px var(--display);font-stretch:85%}
 .empty{padding:28px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--ink-3)}
 .crumb{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:13px;color:var(--muted)}
 .badge{display:inline-flex;align-items:center;min-height:28px;padding:0 10px;font:800 12px var(--display);font-stretch:85%;letter-spacing:.12em}
-.badge.t1{background:#C2410C;color:#fff}.badge.t2{background:var(--watch-bg);color:var(--watch)}.badge.t3{background:var(--soft);color:var(--muted)}
+.badge.t1{background:#C2410C;color:#fff}.badge.t2{background:var(--watch-bg);color:var(--watch)}.badge.t3{background:var(--soft);color:var(--muted)}.badge.t4{background:var(--info-bg);color:var(--info)}
 h1.detail{max-width:28ch;font-size:44px;line-height:1.04}
 .main-col{flex:999 1 600px;min-width:0;display:flex;flex-direction:column;gap:24px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:24px}
@@ -150,8 +151,10 @@ export const KIND_LABEL: Record<Kind, string> = {
   malicious_package: 'Malicious package',
   compromised_package: 'Compromised package',
   poisoned_action: 'Poisoned GitHub Action',
+  runtime_vuln: 'Runtime security fix',
+  security_release: 'Upcoming security release',
 };
-const TIER_LABEL: Record<number, string> = { 1: 'ACT NOW', 2: 'WATCH', 3: 'BULK' };
+const TIER_LABEL: Record<number, string> = { 1: 'ACT NOW', 2: 'WATCH', 3: 'BULK', 4: 'HEADS-UP' };
 
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 function ago(iso: string | null, now = Date.now()): string {
@@ -185,7 +188,9 @@ function flags(t: ThreatOut, now = new Date()) {
   return out;
 }
 
-const sourcesOf = (t: ThreatOut) => [t.kev && 'CISA KEV', t.epss && 'EPSS', t.affected.length && 'OSV'].filter(Boolean).join(', ') || 'OSV';
+const isNode = (t: ThreatOut) => t.kind === 'security_release' || t.affected.some((a) => a.ecosystem === 'Node.js');
+const sourcesOf = (t: ThreatOut) =>
+  [t.kev && 'CISA KEV', t.epss && 'EPSS', isNode(t) && 'Node.js', t.affected.some((a) => a.ecosystem !== 'Node.js') && 'OSV'].filter(Boolean).join(', ') || 'OSV';
 
 function layout(title: string, site: Site, active: 'feed' | 'check' | 'about' | '', body: unknown, status?: SourceStatus) {
   const dot = site.name.indexOf('.');
@@ -215,7 +220,7 @@ ${status.epssDate ? html`<span>EPSS scores ${status.epssDate}</span>` : ''}
   : ''}
 ${body}
 <footer class="wrap"><p class="small">Data: <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog">CISA KEV</a>, <a href="https://www.first.org/epss/">FIRST EPSS</a>,
-<a href="https://osv.dev">OSV</a>, OpenSSF Malicious Packages (Apache-2.0) and the GitHub Advisory Database (CC-BY 4.0).
+<a href="https://osv.dev">OSV</a>, OpenSSF Malicious Packages (Apache-2.0), the GitHub Advisory Database (CC-BY 4.0) and the Node.js security WG.
 Summaries marked AI are generated from those sources and can be wrong; check the linked sources.
 <a href="/about">About and privacy</a> · <a href="${reportUrl(site)}">Report a problem</a> · <a href="${site.repo}">Source code</a></p></footer>
 <script src="/app.js" defer></script></body></html>`;
@@ -253,14 +258,14 @@ ${(['24h', '7d', '30d'] as const).map((w) => html`<label class="chip"><input typ
 </div></fieldset>
 <fieldset><legend class="label">Signal</legend>
 <label class="check"><input type="radio" name="tier" value="1" ${f.minTier === 1 ? 'checked' : ''}><span class="swatch" style="background:#C2410C" aria-hidden="true"></span>Act now only</label>
-<label class="check"><input type="radio" name="tier" value="2" ${f.minTier === 2 ? 'checked' : ''}><span class="swatch" style="background:var(--watch-bg);border:1px solid var(--watch)" aria-hidden="true"></span>Act now and watch</label>
+<label class="check"><input type="radio" name="tier" value="2" ${f.minTier === 2 ? 'checked' : ''}><span class="swatch" style="background:var(--watch-bg);border:1px solid var(--watch)" aria-hidden="true"></span>Act now, watch and heads-up</label>
 <label class="check"><input type="radio" name="tier" value="3" ${f.minTier === 3 ? 'checked' : ''}><span class="swatch" style="height:2px;background:var(--muted)" aria-hidden="true"></span>Include bulk malware</label>
 </fieldset>
 <fieldset><legend class="label">Type</legend>
 ${KINDS.map((k) => html`<label class="check"><input type="checkbox" name="kind" value="${k}" ${q.kind.includes(k) ? 'checked' : ''}>${KIND_LABEL[k]}</label>`)}
 </fieldset>
 <fieldset><legend class="label">Ecosystem</legend><div class="chips">
-${ECOSYSTEMS.map((e) => html`<label class="chip"><input type="checkbox" name="ecosystem" value="${e}" ${q.ecosystem.includes(e) ? 'checked' : ''}>${e}</label>`)}
+${ALL_ECOSYSTEMS.map((e) => html`<label class="chip"><input type="checkbox" name="ecosystem" value="${e}" ${q.ecosystem.includes(e) ? 'checked' : ''}>${e}</label>`)}
 </div></fieldset>
 <noscript><button class="btn dark" type="submit">Apply filters</button></noscript>
 <a href="/" class="small">Reset filters</a>
@@ -324,7 +329,7 @@ ${t.affected.length
 <div class="table-box"><table><thead><tr><th scope="col">Ecosystem</th><th scope="col">Package</th><th scope="col">Affected</th><th scope="col">Safe from</th></tr></thead><tbody>
 ${t.affected.map(
   (a) => html`<tr><td>${a.ecosystem}</td><td class="v">${a.package}</td><td class="v">${a.affected}</td>
-<td class="v ${a.fixed.length ? 'safe' : ''}">${a.fixed.length ? a.fixed.join(', ') : t.kind === 'exploited_vuln' ? 'No fix listed' : 'None. Remove it.'}</td></tr>`,
+<td class="v ${a.fixed.length ? 'safe' : ''}">${a.fixed.length ? a.fixed.join(', ') : ['exploited_vuln', 'runtime_vuln'].includes(t.kind) ? 'No fix listed' : 'None. Remove it.'}</td></tr>`,
 )}</tbody></table></div>
 ${t.kind === 'poisoned_action' ? html`<p class="small">Tags like <code class="mono">@v4</code> can be moved, which is how these attacks work. Only a full commit SHA is safe to trust.</p>` : ''}
 </section>`
@@ -346,7 +351,7 @@ ${t.kind === 'poisoned_action' ? html`<p class="small">Tags like <code class="mo
 <dt>Ransomware use</dt><dd>${t.kev ? (t.kev.ransomware ? 'Known' : 'Unknown') : 'n/a'}</dd>
 <dt>Severity</dt><dd>${t.severity}</dd></dl></div>
 <div class="box" id="sources"><h2 class="label">Sources</h2>
-${t.sources.map((s) => html`<a href="${s.url}" style="font-size:14px">${s.name === 'kev' ? 'CISA KEV' : s.name === 'epss' ? 'FIRST EPSS' : 'OSV'}: ${s.id}</a>`)}</div>
+${t.sources.map((s) => html`<a href="${s.url}" style="font-size:14px">${({ kev: 'CISA KEV', epss: 'FIRST EPSS', nodejs: 'Node.js' } as Record<string, string>)[s.name] ?? 'OSV'}: ${s.id}</a>`)}</div>
 <a class="block-btn" href="/check">Check my dependencies for this</a>
 <a class="btn" style="justify-content:center" href="${reportUrl(site, t.id)}">Report a problem with this entry</a>
 </aside></div></main>`,
@@ -368,6 +373,9 @@ const FORMAT_CHOICES: [string, string][] = [
   ['poetry-lock', 'poetry.lock'],
   ['go-sum', 'go.sum'],
   ['actions', 'GitHub Actions'],
+  ['node-version', '.nvmrc / .node-version'],
+  ['package-json', 'package.json engines'],
+  ['dockerfile', 'Dockerfile'],
 ];
 
 function fixText(m: Match): [string, string] {
@@ -375,7 +383,11 @@ function fixText(m: Match): [string, string] {
   if (f.action === 'remove') return ['None. Remove it.', 'Rotate secrets from a different machine'];
   if (f.action === 'pin-away')
     return [f.avoid_ranges ? `Avoid ${f.avoid_versions?.join(', ')} and ${f.avoid_ranges}` : `Any version except ${f.avoid_versions?.join(', ')}`, 'Rotate secrets on machines that installed it'];
-  if (f.nearest_safe) return [f.nearest_safe, m.kind === 'exploited_vuln' ? 'Check for signs of compromise' : 'Upgrade and redeploy'];
+  if (f.nearest_safe)
+    return [
+      f.latest_release ? `${f.nearest_safe} (latest ${f.latest_release})` : f.nearest_safe,
+      m.kind === 'exploited_vuln' ? 'Check for signs of compromise' : 'Upgrade and redeploy',
+    ];
   return [f.fixed_versions?.length ? f.fixed_versions.join(', ') : 'No fix listed', 'Check the vendor advisory'];
 }
 
@@ -405,7 +417,7 @@ export function checkPage(v: CheckView, site: Site) {
     'check',
     html`<main class="wrap">
 <section style="display:flex;flex-direction:column;gap:8px"><h1>Is anything in your lockfile under attack?</h1>
-<p class="lede" style="max-width:64ch">Paste a lockfile or a list of GitHub Actions. Exact versions are matched against OSV, and only packages with active threats are shown: malware, compromised releases and exploited vulnerabilities. Your file is checked in memory and not stored.</p></section>
+<p class="lede" style="max-width:64ch">Paste a lockfile, a list of GitHub Actions, or a .nvmrc, .node-version, package.json or Dockerfile to check your Node.js version. Exact versions are matched against OSV (Node.js against the Node.js security WG), and only packages with active threats are shown: malware, compromised releases and exploited vulnerabilities. Your file is checked in memory and not stored.</p></section>
 <div class="cols">
 <form class="input" method="post" action="/check" enctype="multipart/form-data" aria-label="Lockfile input">
 <fieldset><legend class="label">Format</legend><div class="chips">
@@ -468,7 +480,8 @@ ${sec('What counts as active', html`<p>Not every CVE. An item makes the feed wit
 <ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">
 <li><strong>Act now:</strong> added to CISA's Known Exploited Vulnerabilities catalog in the last 14 days, a hijacked release of a real package, or a poisoned GitHub Action.</li>
 <li><strong>Watch:</strong> older KEV entries, and CVEs whose EPSS score just crossed 0.5 and that map to a package. EPSS is a predicted probability of exploitation in the next 30 days, not proof of attacks.</li>
-<li><strong>Bulk:</strong> packages that were malicious from day one (typosquats). Hidden from the main list but always caught by the dependency checker.</li></ul>`)}
+<li><strong>Bulk:</strong> packages that were malicious from day one (typosquats). Hidden from the main list but always caught by the dependency checker.</li>
+<li><strong>Heads-up:</strong> Node.js runtime security fixes with no sign of exploitation, and pre-alerts for upcoming Node.js security releases. Shown so you can plan an upgrade, not because attacks are happening. A runtime CVE that lands in KEV moves to Act now or Watch.</li></ul>`)}
 
 ${sec('Privacy: what happens to your lockfile', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
 <li>Lockfiles you paste or upload are parsed in memory and <strong>never stored or logged</strong>.</li>
@@ -481,7 +494,8 @@ ${sec('Sources and licenses', html`<ul style="margin:0;padding-left:20px;display
 <li><a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog">CISA Known Exploited Vulnerabilities</a></li>
 <li><a href="https://www.first.org/epss/">FIRST EPSS</a> exploitation scores</li>
 <li><a href="https://osv.dev">OSV</a>, including <a href="https://github.com/ossf/malicious-packages">OpenSSF Malicious Packages</a> (Apache-2.0)</li>
-<li><a href="https://github.com/advisories">GitHub Advisory Database</a> (CC-BY 4.0)</li></ul>
+<li><a href="https://github.com/advisories">GitHub Advisory Database</a> (CC-BY 4.0)</li>
+<li><a href="https://github.com/nodejs/security-wg">Node.js security WG</a> vulnerability index, the <a href="https://nodejs.org/en/blog/vulnerability">Node.js security blog</a> and the Node.js release index</li></ul>
 <p>Data is refreshed every 10 minutes. ${site.name} is independent and not affiliated with any of these organizations.</p>`)}
 
 ${sec('AI summaries', html`<p>Summaries marked AI are written by Claude (Anthropic) from the public advisory text only, and regenerated when a source changes. Only public advisory data is sent to the model, never anything you paste. They can be wrong, so each one links to its sources.</p>`)}

@@ -1,9 +1,10 @@
 import { knownExploitedCves } from './adapters/kev';
+import { latestNodeReleases } from './adapters/nodejs';
 import { isCompromised } from './adapters/osv_mal';
 import { z } from 'zod';
 import { describeRanges } from './db';
 import { affectedOf, getVuln, queryBatch, type OsvVuln } from './osv';
-import { detectFormat, FORMATS, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
+import { detectFormat, FORMATS, nodeVersion, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
 import { normalizeEcosystem, type Affected, type Env } from './types';
 import { isAffected, nearestSafe, samePackage } from './versions';
 
@@ -17,9 +18,17 @@ export const checkShape = {
     .max(MAX_PACKAGES)
     .optional()
     .describe('Exact installed versions'),
-  manifest: z.string().optional().describe('Contents of package-lock.json, pnpm-lock.yaml, requirements.txt, poetry.lock, go.sum or a workflow file'),
+  manifest: z
+    .string()
+    .optional()
+    .describe('Contents of package-lock.json, pnpm-lock.yaml, requirements.txt, poetry.lock, go.sum, a workflow file, .nvmrc, .node-version, package.json (engines.node) or a Dockerfile'),
   format: z.enum(FORMATS).optional().describe('Detected automatically when omitted'),
   actions: z.array(z.string()).max(MAX_PACKAGES).optional().describe("GitHub Actions refs like 'actions/checkout@v4.1.1'"),
+  runtimes: z
+    .array(z.object({ name: z.string(), version: z.string() }))
+    .max(50)
+    .optional()
+    .describe("Runtime versions like { name: 'node', version: '22.23.0' }. Only Node.js is supported."),
 };
 export const checkSchema = z.object({ ...checkShape, filename: z.string().optional() });
 export type CheckInput = z.infer<typeof checkSchema>;
@@ -31,6 +40,8 @@ export interface Fix {
   avoid_versions?: string[];
   /** Affected ranges beyond the listed versions; when set, not every other version is safe. */
   avoid_ranges?: string;
+  /** Node.js only: the newest release on the nearest safe version's line. */
+  latest_release?: string;
 }
 
 export interface Match {
@@ -49,7 +60,8 @@ export interface Match {
 export class CheckError extends Error {}
 
 function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[] } {
-  if (!input.packages?.length && !input.manifest?.trim() && !input.actions?.length) throw new CheckError('pass packages, manifest or actions');
+  if (!input.packages?.length && !input.manifest?.trim() && !input.actions?.length && !input.runtimes?.length)
+    throw new CheckError('pass packages, manifest, actions or runtimes');
   const packages: Pkg[] = [];
   const unresolved: Unresolved[] = [];
   if (input.manifest) {
@@ -74,6 +86,15 @@ function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[]
     packages.push(...a.packages);
     unresolved.push(...a.unresolved);
   }
+  for (const r of input.runtimes ?? []) {
+    if (normalizeEcosystem(r.name) !== 'Node.js') {
+      unresolved.push({ entry: `${r.name}@${r.version}`, reason: 'only the node runtime is supported' });
+      continue;
+    }
+    const p = nodeVersion(r.version, 'runtimes');
+    packages.push(...p.packages);
+    unresolved.push(...p.unresolved);
+  }
   if (packages.length > MAX_PACKAGES) throw new CheckError(`too many packages (${packages.length}, max ${MAX_PACKAGES})`);
   return { packages, unresolved };
 }
@@ -83,10 +104,14 @@ function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[]
  * plus every MAL- hit and every CVE in the full KEV catalog: those are always worth reporting, even if they predate our window.
  */
 export async function checkDependencies(env: Env, input: CheckInput) {
-  const { packages, unresolved } = collect(input);
+  const collected = collect(input);
+  const { unresolved } = collected;
+  // Runtimes are matched only against our own affected rows (localMatches), so they go last and skip OSV.
+  const osvPkgs = collected.packages.filter((p) => p.ecosystem !== 'Node.js');
+  const packages = [...osvPkgs, ...collected.packages.filter((p) => p.ecosystem === 'Node.js')];
   // OSV does no range matching for GitHub Actions, so ask for every advisory and filter with isAffected below.
   const hits = await queryBatch(
-    packages.map((p) => ({
+    osvPkgs.map((p) => ({
       package: { ecosystem: p.ecosystem, name: p.name },
       version: p.ecosystem === 'GitHub Actions' ? undefined : p.version,
     })),
@@ -154,6 +179,14 @@ export async function checkDependencies(env: Env, input: CheckInput) {
   // Our feed can be ahead of OSV (the GHSA adapter reads GitHub directly), so also match against local affected rows.
   for (const m of await localMatches(env, packages, seen)) matches.push(m);
 
+  if (matches.some((m) => m.ecosystem === 'Node.js')) {
+    const latest = await latestNodeReleases(env);
+    for (const m of matches) {
+      const line = m.ecosystem === 'Node.js' && m.fix.nearest_safe?.split('.')[0];
+      if (line && latest[line] && latest[line] !== m.fix.nearest_safe) m.fix.latest_release = latest[line];
+    }
+  }
+
   matches.sort((a, b) => a.tier - b.tier);
   return { scanned: packages.length, matches, unresolved };
 }
@@ -202,7 +235,7 @@ async function localMatches(env: Env, packages: Pkg[], seen: Set<string>[]): Pro
       const aff = combine(rs.map((r) => ({ ecosystem: r.ecosystem, package: r.package, ranges: JSON.parse(r.ranges_json), versions: JSON.parse(r.versions_json) })))!;
       if (!isAffected(pkg.ecosystem, pkg.version, aff.ranges, aff.versions)) continue;
       const t = rs[0];
-      const isMal = t.kind !== 'exploited_vuln';
+      const isMal = t.kind === 'malicious_package' || t.kind === 'compromised_package' || t.kind === 'poisoned_action';
       seen[i].add(id);
       out.push({
         ...pkg,

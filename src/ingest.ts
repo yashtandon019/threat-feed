@@ -1,15 +1,16 @@
 import { epss } from './adapters/epss';
 import { ghsa } from './adapters/ghsa';
 import { kev } from './adapters/kev';
+import { nodejs } from './adapters/nodejs';
 import { osvMal } from './adapters/osv_mal';
 import { linkCve } from './osv';
 import { templateSummary } from './summarize';
 import type { Adapter, Affected, Env, Kind, Severity, SourceRecord } from './types';
 
-export const ADAPTERS: Adapter[] = [kev, epss, ghsa, osvMal];
+export const ADAPTERS: Adapter[] = [kev, epss, ghsa, osvMal, nodejs];
 export const KEV_HOT_DAYS = 14;
 
-const KIND_RANK: Kind[] = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'];
+const KIND_RANK: Kind[] = ['security_release', 'runtime_vuln', 'exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'];
 const SEV_RANK: Severity[] = ['unknown', 'low', 'medium', 'high', 'critical'];
 
 export interface Merged {
@@ -24,10 +25,12 @@ export interface Merged {
   withdrawn: boolean;
 }
 
-export function computeTier(t: Pick<Merged, 'kind' | 'kev' | 'epss'>, now: Date): 1 | 2 | 3 {
+export function computeTier(t: Pick<Merged, 'kind' | 'kev' | 'epss'>, now: Date): 1 | 2 | 3 | 4 {
   if (t.kind === 'poisoned_action' || t.kind === 'compromised_package') return 1;
   if (t.kev && now.getTime() - Date.parse(t.kev.dateAdded) <= KEV_HOT_DAYS * 864e5) return 1;
   if (t.kev || (t.epss ?? 0) >= 0.5) return 2;
+  // Heads-up: runtime fixes and release pre-alerts with no sign of exploitation.
+  if (t.kind === 'runtime_vuln' || t.kind === 'security_release') return 4;
   return 3;
 }
 

@@ -12,7 +12,7 @@ export interface Env {
   MCP_LIMIT?: RateLimit;
 }
 
-export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'] as const;
+export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action', 'runtime_vuln', 'security_release'] as const;
 export type Kind = (typeof KINDS)[number];
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
 
@@ -54,9 +54,12 @@ export interface Adapter {
 
 /** Tracked package ecosystems, using OSV's names. */
 export const ECOSYSTEMS = ['npm', 'PyPI', 'Go', 'crates.io', 'Maven', 'NuGet', 'RubyGems', 'Packagist', 'GitHub Actions'];
+/** Package ecosystems plus runtimes, for filters and input; runtimes are matched locally, not via OSV. */
+export const ALL_ECOSYSTEMS = [...ECOSYSTEMS, 'Node.js'];
 
 export function normalizeEcosystem(s: string): string | undefined {
   const k = s.trim().toLowerCase();
   if (k === 'actions' || k === 'github-actions') return 'GitHub Actions';
-  return ECOSYSTEMS.find((e) => e.toLowerCase() === k);
+  if (k === 'node' || k === 'nodejs') return 'Node.js';
+  return ALL_ECOSYSTEMS.find((e) => e.toLowerCase() === k);
 }

@@ -183,25 +183,25 @@ app.get('/llms.txt', (c) => {
   const s = c.env.SITE_URL;
   return c.text(`# Active security threats
 
-> A free, no-login live feed of security threats that are happening now: CISA KEV additions, CVEs with fast-rising EPSS scores, and malicious or hijacked packages and GitHub Actions from OSV (OpenSSF Malicious Packages, GitHub Advisory Database). Updated every 10 minutes.
+> A free, no-login live feed of security threats that are happening now: CISA KEV additions, CVEs with fast-rising EPSS scores, and malicious or hijacked packages and GitHub Actions from OSV (OpenSSF Malicious Packages, GitHub Advisory Database), plus Node.js runtime security releases. Updated every 10 minutes.
 
 ## MCP server
 - Endpoint: ${s}/mcp (Streamable HTTP, no auth)
 - list_feed(ecosystem?, kind?, min_tier?, since?, limit?): recent active threats
 - get_threat(id): one threat by CVE, GHSA or MAL id
-- check_dependencies(packages? | manifest? | actions?): which dependencies match active threats, with the nearest safe version
+- check_dependencies(packages? | manifest? | actions? | runtimes?): which dependencies or Node.js versions match active threats, with the nearest safe version. runtimes: [{ name: "node", version: "22.23.0" }]
 
 ## JSON API
 - GET ${s}/api/v1/threats?ecosystem=npm,PyPI&kind=compromised_package&tier=2&since=7d&limit=50
 - GET ${s}/api/v1/threats/{id}
-- POST ${s}/api/v1/check  (JSON {packages, manifest, format, actions} or a raw lockfile body with ?filename=)
+- POST ${s}/api/v1/check  (JSON {packages, manifest, format, actions, runtimes} or a raw body with ?filename=; also reads .nvmrc, .node-version, package.json engines.node and Dockerfile FROM node:<version>)
 
 ## Feeds (same query filters)
 - ${s}/feed.xml (RSS), ${s}/feed.atom, ${s}/feed.json
 
 ## Fields
-- tier: 1 act now, 2 elevated, 3 bulk typosquat malware (hidden by default)
-- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action. An exploited_vuln with kev null is an EPSS prediction, not observed exploitation
+- tier: 1 act now, 2 elevated, 3 bulk typosquat malware (hidden by default), 4 heads-up: Node.js runtime fixes with no sign of exploitation and upcoming security release pre-alerts
+- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action, runtime_vuln, security_release. An exploited_vuln with kev null is an EPSS prediction, not observed exploitation
 - summary_source: "ai" summaries are generated from source text and can be wrong; "template" summaries are fixed wording
 `);
 });

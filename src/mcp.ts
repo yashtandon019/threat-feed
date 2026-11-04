@@ -16,9 +16,9 @@ function server(env: Env) {
   s.registerTool(
     'list_feed',
     {
-      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, observed) and likely-to-be-exploited ones (EPSS over 0.5, predicted only; kev is null) and malicious or compromised packages and GitHub Actions. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware. ${UNTRUSTED}`,
+      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, observed) and likely-to-be-exploited ones (EPSS over 0.5, predicted only; kev is null) and malicious or compromised packages and GitHub Actions, plus Node.js runtime security fixes and release pre-alerts. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware, 4 = heads-up (runtime fixes with no sign of exploitation, upcoming security releases; included unless min_tier is 1). ${UNTRUSTED}`,
       inputSchema: z.object({
-        ecosystem: z.array(z.string()).optional().describe('npm, PyPI, Go, crates.io, Maven, NuGet, RubyGems, Packagist, GitHub Actions'),
+        ecosystem: z.array(z.string()).optional().describe('npm, PyPI, Go, crates.io, Maven, NuGet, RubyGems, Packagist, GitHub Actions, Node.js'),
         kind: z.array(z.enum(KINDS)).optional(),
         min_tier: z.number().int().min(1).max(3).optional().describe('Include tiers up to this number. Default 2.'),
         since: z.string().optional().describe("'24h', '7d' (default), '30d' or an ISO timestamp"),
@@ -47,11 +47,11 @@ function server(env: Env) {
   s.registerTool(
     'check_dependencies',
     {
-      description: `Check dependencies against active threats and known malicious packages. Prefer 'packages' (cheap) over pasting a whole lockfile. Returns matches with the nearest safe version, plus entries that could not be checked (unpinned requirements, moving action tags). ${UNTRUSTED}`,
+      description: `Check dependencies and the Node.js runtime against active threats and known malicious packages. Prefer 'packages' (cheap) over pasting a whole lockfile; pass runtimes: [{ name: 'node', version }] for Node.js. Returns matches with the nearest safe version (and latest_release on that line for Node.js), plus entries that could not be checked (unpinned requirements, moving action tags). ${UNTRUSTED}`,
       inputSchema: z.object(checkShape),
     },
     async (a) => {
-      if (!a.packages?.length && !a.manifest && !a.actions?.length) return fail('Pass packages, manifest or actions.');
+      if (!a.packages?.length && !a.manifest && !a.actions?.length && !a.runtimes?.length) return fail('Pass packages, manifest, actions or runtimes.');
       try {
         return json(await checkDependencies(env, a));
       } catch (err) {

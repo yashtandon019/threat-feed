@@ -315,7 +315,7 @@ describe('about, health, rate limits and report links', () => {
         .bind(source, '{}', at)
         .run();
     const now = new Date().toISOString();
-    for (const s of ['kev', 'epss', 'ghsa', 'osv_mal']) await put(s, now);
+    for (const s of ['kev', 'epss', 'ghsa', 'osv_mal', 'nodejs']) await put(s, now);
     expect((await get('/health')).status).toBe(200);
     await put('kev', '2020-01-01T00:00:00Z');
     expect((await get('/health')).status).toBe(503);

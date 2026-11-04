@@ -15,7 +15,7 @@ export interface Parsed {
   unresolved: Unresolved[];
 }
 
-export const FORMATS = ['package-lock', 'pnpm-lock', 'requirements', 'poetry-lock', 'go-sum', 'actions'] as const;
+export const FORMATS = ['package-lock', 'pnpm-lock', 'requirements', 'poetry-lock', 'go-sum', 'actions', 'node-version', 'package-json', 'dockerfile'] as const;
 export type Format = (typeof FORMATS)[number];
 
 export function detectFormat(text: string, filename = ''): Format | null {
@@ -24,10 +24,16 @@ export function detectFormat(text: string, filename = ''): Format | null {
   if (f.endsWith('pnpm-lock.yaml')) return 'pnpm-lock';
   if (f.endsWith('poetry.lock')) return 'poetry-lock';
   if (f.endsWith('go.sum')) return 'go-sum';
+  if (f.endsWith('.nvmrc') || f.endsWith('.node-version')) return 'node-version';
+  if (f.endsWith('package.json')) return 'package-json';
+  if (/(^|\/)dockerfile[^/]*$|\.dockerfile$/.test(f)) return 'dockerfile';
   if (f.endsWith('.txt')) return 'requirements';
   if (f.includes('.github/workflows') || f.endsWith('.yml')) return 'actions';
   const head = text.trimStart().slice(0, 400);
   if (head.startsWith('{') && head.includes('"lockfileVersion"')) return 'package-lock';
+  if (head.startsWith('{') && text.includes('"engines"')) return 'package-json';
+  if (/^v?\d+(\.\d+){0,2}\s*$/.test(text.trim()) || /^lts\//.test(text.trim())) return 'node-version';
+  if (/^\s*FROM\s+\S/im.test(text)) return 'dockerfile';
   if (/^lockfileVersion:/m.test(head)) return 'pnpm-lock';
   if (head.includes('[[package]]')) return 'poetry-lock';
   if (/^\S+ v\d\S* h1:/m.test(head)) return 'go-sum';
@@ -169,6 +175,37 @@ function usesValues(text: string): string[] {
   return out;
 }
 
+/** One Node.js version string; only exact x.y.z can be matched. */
+export function nodeVersion(raw: string, where: string): Parsed {
+  const v = raw.trim().replace(/^[v=]+/, '');
+  if (/^\d+\.\d+\.\d+$/.test(v)) return { packages: [{ ecosystem: 'Node.js', name: 'node', version: v }], unresolved: [] };
+  return { packages: [], unresolved: [{ entry: `${where}: node ${raw.trim()}`, reason: 'not an exact Node.js version (x.y.z); pin one to check it' }] };
+}
+
+export function parseNodeVersionFile(text: string): Parsed {
+  const line = text.split('\n').map((l) => l.replace(/#.*$/, '').trim()).find(Boolean) ?? '';
+  return nodeVersion(line, '.nvmrc');
+}
+
+export function parsePackageJsonEngines(text: string): Parsed {
+  const node = (JSON.parse(text) as { engines?: { node?: unknown } }).engines?.node;
+  return typeof node === 'string' ? nodeVersion(node, 'package.json engines') : { packages: [], unresolved: [] };
+}
+
+/** `FROM node:<tag>` lines, including registry prefixes and `AS` stages. */
+export function parseDockerfile(text: string): Parsed {
+  const out: Parsed = { packages: [], unresolved: [] };
+  for (const m of text.matchAll(/^\s*FROM\s+(?:--\S+\s+)*(?:[\w.-]+(?::\d+)?\/)?(?:library\/)?node(?::([^\s@]+))?(?:@\S+)?(?:\s|$)/gim)) {
+    const tag = m[1] ?? 'latest';
+    const version = tag.match(/^v?(\d+\.\d+\.\d+)(?:-|$)/)?.[1];
+    const p = nodeVersion(version ?? tag, 'Dockerfile FROM');
+    out.packages.push(...p.packages);
+    out.unresolved.push(...p.unresolved);
+  }
+  out.packages = dedupe(out.packages);
+  return out;
+}
+
 export function parseManifest(text: string, format: Format): Parsed {
   switch (format) {
     case 'package-lock':
@@ -183,5 +220,11 @@ export function parseManifest(text: string, format: Format): Parsed {
       return parseGoSum(text);
     case 'actions':
       return parseActions(usesValues(text));
+    case 'node-version':
+      return parseNodeVersionFile(text);
+    case 'package-json':
+      return parsePackageJsonEngines(text);
+    case 'dockerfile':
+      return parseDockerfile(text);
   }
 }

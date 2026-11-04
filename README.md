@@ -4,6 +4,7 @@ A free, no-login live feed of security threats that are happening now, not every
 
 - **Exploited vulnerabilities:** new CISA KEV entries (observed exploitation), and CVEs whose EPSS score just crossed 0.5 (a predicted likelihood, only when they map to a package).
 - **Supply chain attacks:** malicious and hijacked packages and GitHub Actions, read directly from GitHub's malware advisories (minutes old) and from OSV (OpenSSF Malicious Packages).
+- **Node.js runtime:** fixes from the Node.js security WG index and pre-alerts for upcoming Node.js security releases, as low-urgency heads-up items unless KEV lists them.
 
 It serves a web feed, RSS/Atom/JSON Feed, a JSON API, `llms.txt`, and a remote MCP server with a `check_dependencies` tool.
 
@@ -17,14 +18,16 @@ Stack: TypeScript, Hono on Cloudflare Workers, D1, a Cron Trigger every 10 minut
 | `/t/{id}` | One threat. Any alias works: `CVE-`, `GHSA-`, `MAL-` |
 | `/feed.xml`, `/feed.atom`, `/feed.json` | Feeds, same filters |
 | `GET /api/v1/threats`, `GET /api/v1/threats/{id}` | JSON API, same filters |
-| `POST /api/v1/check` | JSON `{packages, manifest, format, actions}`, or a raw lockfile body with `?filename=` |
+| `POST /api/v1/check` | JSON `{packages, manifest, format, actions, runtimes}`, or a raw body with `?filename=`. Also reads `.nvmrc`, `.node-version`, `package.json` `engines.node` and Dockerfile `FROM node:<version>` |
 | `/mcp` | MCP over Streamable HTTP, no auth: `list_feed`, `get_threat`, `check_dependencies` |
 | `/llms.txt` | Agent-facing index |
 | `/about` | What counts as active, privacy, sources, contact |
-| `/health` | 200 when every source (KEV, EPSS, GHSA, OSV) ran in the last 30 minutes, else 503 with per-source ages (for uptime monitors) |
+| `/health` | 200 when every source (KEV, EPSS, GHSA, OSV, Node.js) ran in the last 30 minutes, else 503 with per-source ages (for uptime monitors) |
 
 ```bash
 curl -s -X POST "http://localhost:8787/api/v1/check?filename=package-lock.json" --data-binary @package-lock.json
+curl -s -X POST "http://localhost:8787/api/v1/check?filename=.nvmrc" --data-binary @.nvmrc
+curl -s -X POST http://localhost:8787/api/v1/check -H 'content-type: application/json' -d '{"runtimes":[{"name":"node","version":"22.23.0"}]}'
 ```
 
 ## Signal rules
@@ -34,6 +37,7 @@ curl -s -X POST "http://localhost:8787/api/v1/check?filename=package-lock.json" 
 | 1, act now | Added to KEV in the last 14 days; a hijacked package (see below); any poisoned GitHub Action |
 | 2, elevated | Any other KEV entry from the last 30 days; a CVE that newly crossed EPSS 0.5 and maps to a package |
 | 3, bulk | Malicious packages that were malicious from day one (typosquats, dependency confusion). Hidden by default and shown as a count |
+| 4, heads-up | Node.js runtime CVEs with no KEV entry or EPSS signal, and Node.js security release pre-alerts (withdrawn once the CVEs are published). Shown unless `tier=1` |
 
 **Hijacked or throwaway?** npm and PyPI delete malware-only packages, so a hijacked real project still has many clean releases. A MAL entry counts as hijacked when the registry lists at least 10 releases outside the flagged versions. Other ecosystems fall back to "the advisory range starts at a version other than 0". Only registry JSON metadata is read; no package is ever downloaded or run.
 
@@ -42,7 +46,7 @@ Threats stay in the default feed for 7 days after their last signal (`since` cha
 ## How it works
 
 ```
-cron */10 -> adapters (kev, epss, osv_mal) -> SourceRecord[] -> upsert: hash check, link CVE to packages via OSV,
+cron */10 -> adapters (kev, epss, ghsa, osv_mal, nodejs) -> SourceRecord[] -> upsert: hash check, link CVE to packages via OSV,
           dedupe by alias, merge, tier -> D1 -> summarize (tier 1-2 only, when sources change)
 request   -> Hono (Cache API, 60 s) -> D1;  check_dependencies -> OSV querybatch -> keep active threats + any MAL hit + any CVE in the full KEV catalog
 ```
@@ -50,6 +54,7 @@ request   -> Hono (Cache API, 60 s) -> D1;  check_dependencies -> OSV querybatch
 - **Adapters** live in `src/adapters/`, one file per source. Each returns `SourceRecord[]` (see `src/types.ts`) and a cursor string. To add a source, write one adapter and add it to `ADAPTERS` in `src/ingest.ts`.
 - **Dedupe:** every CVE, GHSA and MAL id is a row in `aliases`. A record whose aliases point at two threats merges them into the older one; both ids keep resolving.
 - **Version matching** is done by OSV (`querybatch`), which handles each ecosystem's version rules. We only compare versions to pick the nearest safe one (semver for npm, Go, crates.io and Actions; PEP 440 for PyPI).
+- **Node.js runtime:** the `nodejs` adapter reads the security WG `vuln/core/index.json` (CVEs from releases in the last 30 days, plus any in KEV), the Node.js vulnerability blog RSS (pre-alerts) and `dist/index.json` (latest release per line). Each CVE becomes ecosystem `Node.js`, package `node`, one range per release line. Runtime versions are matched locally with semver, not via OSV.
 - **Summaries:** template text for everything, replaced by a 3-sentence Claude summary for tier 1-2. The model only sees source text, fenced as untrusted. A refusal or bad output keeps the template.
 
 ## Local development
@@ -142,11 +147,12 @@ False positives, missing threats and wrong summaries: [open an issue](../../issu
 - Action refs pinned to a commit SHA or a moving tag (`@v4`) are returned as `unresolved`, not checked.
 - Unpinned `requirements.txt` lines are returned as `unresolved`.
 - Maven, NuGet, RubyGems and Packagist matches list fixed versions without picking the nearest one.
-- Container images are not supported.
+- Container images are not scanned; only the `node` base image tag in a Dockerfile is read.
+- Node.js versions must be exact (`22.23.0`); ranges, `lts/*` and moving image tags are returned as `unresolved`.
 
 ## Data and licenses
 
-CISA KEV, FIRST EPSS, and OSV (OpenSSF Malicious Packages, Apache-2.0; GitHub Advisory Database, CC-BY-4.0). Attribution is in the site footer.
+CISA KEV, FIRST EPSS, the Node.js security WG, and OSV (OpenSSF Malicious Packages, Apache-2.0; GitHub Advisory Database, CC-BY-4.0). Attribution is in the site footer.
 
 ## License
 

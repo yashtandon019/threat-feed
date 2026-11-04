@@ -121,8 +121,9 @@ async function affectedFor(env: Env, ids: string[]) {
 }
 
 export async function listThreats(env: Env, f: Filters): Promise<ThreatOut[]> {
-  const where = [`t.status = 'active'`, 't.tier <= ?', 't.last_signal_at >= ?'];
-  const binds: unknown[] = [f.minTier, f.since];
+  // Heads-up (tier 4) shows with every filter except "act now only".
+  const where = [`t.status = 'active'`, '(t.tier <= ? OR (t.tier = 4 AND ? >= 2))', 't.last_signal_at >= ?'];
+  const binds: unknown[] = [f.minTier, f.minTier, f.since];
   if (f.kinds.length) {
     where.push(`t.kind IN (${f.kinds.map(() => '?').join(',')})`);
     binds.push(...f.kinds);
@@ -169,7 +170,7 @@ export interface SourceStatus {
 }
 
 /** Every adapter in ingest.ts ADAPTERS; listed here to avoid an import cycle. */
-export const SOURCES = ['kev', 'epss', 'ghsa', 'osv_mal'] as const;
+export const SOURCES = ['kev', 'epss', 'ghsa', 'osv_mal', 'nodejs'] as const;
 
 /** Freshness for the status strip, read from the adapter cursors. */
 export async function sourceStatus(env: Env): Promise<SourceStatus> {
