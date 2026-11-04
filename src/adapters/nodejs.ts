@@ -1,6 +1,6 @@
 import semver from 'semver';
 import type { Adapter, Env, OsvRange, Severity, SourceRecord } from '../types';
-import { knownExploitedCves } from './kev';
+import { kevDates } from './kev';
 
 const CORE = 'https://raw.githubusercontent.com/nodejs/security-wg/main/vuln/core/index.json';
 const RSS = 'https://nodejs.org/en/feed/vulnerability.xml';
@@ -29,8 +29,7 @@ export interface Release {
 interface NodeCursor {
   /** Newest release per major line, from dist/index.json. */
   latest?: Record<string, string>;
-  /** Pre-alerts already emitted, so they can be withdrawn once CVEs are out. */
-  prealerts?: string[];
+  v?: number;
 }
 
 const sev = (s?: string): Severity => (SEVERITIES as string[]).includes(s?.toLowerCase() ?? '') ? (s!.toLowerCase() as Severity) : 'unknown';
@@ -84,45 +83,80 @@ export function nodeRanges(vulnerable: string, patched: string, latest: Record<s
   return [...ranges.values()].sort((a, b) => semver.compare(a.events[0].introduced, b.events[0].introduced));
 }
 
-export function cveRecord(key: string, e: CoreEntry, latest: Record<string, string>, published: string): SourceRecord {
-  const cves = (e.cve ?? []).filter((c) => /^CVE-\d{4}-\d+$/.test(c));
+const NODE_URL = 'https://nodejs.org/en/blog/vulnerability';
+const cvesOf = (e: CoreEntry) => (e.cve ?? []).filter((c) => /^CVE-\d{4}-\d+$/.test(c));
+const rank = (s: Severity) => (s === 'unknown' ? 9 : SEVERITIES.indexOf(s));
+
+/** Union of every entry's ranges: per line, the highest fix (a release fixes all its CVEs at once). */
+export function combinedRanges(entries: CoreEntry[], latest: Record<string, string>): OsvRange[] {
+  const byMajor = new Map<string, OsvRange>();
+  for (const e of entries)
+    for (const r of nodeRanges(e.vulnerable ?? '', e.patched ?? '', latest)) {
+      const cur = byMajor.get(r.events[0].introduced);
+      const fixed = r.events[1].fixed;
+      const curFixed = cur?.events[1].fixed;
+      if (!cur || (fixed && (!curFixed || semver.gt(fixed, curFixed)))) byMajor.set(r.events[0].introduced, r);
+    }
+  return [...byMajor.values()].sort((a, b) => semver.compare(a.events[0].introduced, b.events[0].introduced));
+}
+
+/** A KEV-listed runtime CVE stands on its own so the existing tier rules apply. */
+export function exploitedRecord(key: string, e: CoreEntry, latest: Record<string, string>, kevAdded: string): SourceRecord {
+  const cves = cvesOf(e);
   return {
     source: 'nodejs',
     sourceId: cves[0] ?? `nodejs-core-${key}`,
-    aliases: cves.length ? cves : [`nodejs-core-${key}`],
-    kind: 'runtime_vuln',
-    title: `Node.js: ${e.description ?? cves[0] ?? 'security fix'}`,
+    aliases: cves,
+    kind: 'exploited_vuln',
+    title: `Node.js: ${e.description ?? cves[0]}`,
     details: e.overview ?? e.description ?? '',
     severity: sev(e.severity),
     affected: [{ ecosystem: 'Node.js', package: 'node', ranges: nodeRanges(e.vulnerable ?? '', e.patched ?? '', latest), versions: [] }],
-    url: e.ref ?? 'https://nodejs.org/en/blog/vulnerability',
-    published,
+    url: e.ref ?? NODE_URL,
+    published: kevAdded,
+    kev: { dateAdded: kevAdded, dueDate: '', ransomware: false, requiredAction: 'Upgrade Node.js to a patched release.' },
   };
 }
 
 /** Lines and severity from the pre-alert post, e.g. "The highest severity issue fixed in the 22.x release line is HIGH." */
 export function parsePrealert(md: string): { lines: string[]; severity: Severity } {
-  const lines = [...md.matchAll(/in the (\d+)\.x release line is (\w+)/gi)].map((m) => ({ line: `${m[1]}.x`, sev: sev(m[2]) }));
+  const lines = [...md.matchAll(/in the (\d+)\.x release line is (\w+)/gi)].map((m) => `${m[1]}.x`);
   const overall = sev(md.match(/highest severity issue fixed in this release is (\w+)/i)?.[1]);
-  return { lines: [...new Set(lines.map((l) => l.line))], severity: overall };
+  return { lines: [...new Set(lines)], severity: overall };
 }
 
-export function prealertRecord(r: Release, info: { lines: string[]; severity: Severity }, withdrawn: boolean): SourceRecord {
+/**
+ * One item per security release, updated in place: a pre-alert until the CVEs are out, then the fixed versions.
+ * KEV-listed CVEs are left out of `entries` (they get their own exploited item) but still count in the text.
+ */
+export function releaseRecord(r: Release, pre: { lines: string[]; severity: Severity }, entries: CoreEntry[], exploited: string[], latest: Record<string, string>): SourceRecord {
   const when = r.title.replace(/\s*Security Releases\s*$/i, '');
-  const lines = info.lines.length ? info.lines.join(', ') : 'supported';
-  const sevText = info.severity === 'unknown' ? '' : ` The highest severity is ${info.severity.toUpperCase()}.`;
+  const base = { source: 'nodejs', sourceId: `nodejs-${r.slug}`, kind: 'security_release' as const, url: r.link, published: r.published };
+  if (!entries.length && !exploited.length) {
+    const lines = pre.lines.length ? pre.lines.join(', ') : 'supported';
+    const sevText = pre.severity === 'unknown' ? '' : ` The highest severity is ${pre.severity.toUpperCase()}.`;
+    return {
+      ...base,
+      aliases: [base.sourceId],
+      title: `Node.js: Security releases for ${lines} on ${when}`,
+      details: `The Node.js project will release fixes for the ${lines} release lines on or shortly after ${when}.${sevText} End-of-life lines are always affected. Fixed versions appear here on release day.`,
+      severity: pre.severity,
+      affected: [],
+    };
+  }
+  const ranges = combinedRanges(entries, latest);
+  const fixed = ranges.map((x) => x.events[1].fixed).filter(Boolean);
+  const severity = entries.map((e) => sev(e.severity)).reduce<Severity>((a, b) => (rank(b) < rank(a) ? b : a), 'unknown');
+  const n = entries.length + exploited.length;
+  const kevText = exploited.length ? ` ${exploited.join(', ')} ${exploited.length === 1 ? 'is' : 'are'} known to be exploited and listed separately.` : '';
+  const list = entries.map((e) => `${cvesOf(e).join(', ') || 'No CVE'} (${sev(e.severity)}): ${e.description ?? ''}`);
   return {
-    source: 'nodejs',
-    sourceId: `nodejs-${r.slug}`,
-    aliases: [`nodejs-${r.slug}`],
-    kind: 'security_release',
-    title: `Node.js: Security releases for ${lines} on ${when}`,
-    details: `The Node.js project will release fixes for the ${lines} release lines on or shortly after ${when}.${sevText} End-of-life lines are always affected. CVE details and fixed versions are published on release day.`,
-    severity: info.severity,
-    affected: [],
-    url: r.link,
-    published: r.published,
-    withdrawn,
+    ...base,
+    aliases: [base.sourceId, ...entries.flatMap(cvesOf)],
+    title: `Node.js: Security releases of ${when}, ${n} fix${n === 1 ? '' : 'es'}`,
+    details: `Node.js released ${fixed.join(', ') || 'patched versions'} with ${n} security fix${n === 1 ? '' : 'es'}${severity === 'unknown' ? '' : `, highest severity ${severity.toUpperCase()}`}.${kevText} Upgrade to the fixed release for your line.\n\n${list.join('\n')}`,
+    severity,
+    affected: entries.length ? [{ ecosystem: 'Node.js', package: 'node', ranges, versions: [] }] : [],
   };
 }
 
@@ -132,11 +166,24 @@ async function getJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
-/** Recent CVEs (plus any in KEV) from the security WG index, and pre-alerts for releases whose CVEs are not out yet. */
+// ponytail: one-time removal of the per-CVE items from the first version; delete once every deployment has run it.
+async function dropPerCveItems(env: Env) {
+  const only = "SELECT threat_id FROM source_records GROUP BY threat_id HAVING SUM(source <> 'nodejs') = 0";
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM affected WHERE threat_id IN (${only})`),
+    env.DB.prepare(`DELETE FROM aliases WHERE threat_id IN (${only})`),
+    env.DB.prepare(`DELETE FROM threats WHERE id IN (${only})`),
+    env.DB.prepare("DELETE FROM affected WHERE ecosystem = 'Node.js'"),
+    env.DB.prepare("DELETE FROM source_records WHERE source = 'nodejs'"),
+  ]);
+}
+
+/** One item per recent Node.js security release, plus a separate item for each KEV-listed runtime CVE. */
 export const nodejs: Adapter = {
   name: 'nodejs',
   async run(env: Env, cursor, now) {
     const prev: NodeCursor = cursor ? JSON.parse(cursor) : {};
+    if (cursor && prev.v !== 2) await dropPerCveItems(env);
     const [core, xml, dist] = await Promise.all([
       getJson<Record<string, CoreEntry>>(CORE),
       fetch(RSS).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`nodejs ${RSS}: ${r.status}`)))),
@@ -145,27 +192,28 @@ export const nodejs: Adapter = {
     const latest = latestPerLine(dist);
     const since = new Date(now.getTime() - WINDOW_DAYS * 864e5).toISOString();
     const recent = parseReleases(xml).filter((r) => r.published >= since);
-    const published = new Map(recent.map((r) => [r.link, r.published]));
-    const kev = await knownExploitedCves(env);
+    const kev = await kevDates(env);
 
+    const recentRefs = new Set(recent.map((r) => r.link));
     const records: SourceRecord[] = [];
-    const released = new Set<string>();
+    const byRef = new Map<string, { entries: CoreEntry[]; exploited: string[] }>();
     for (const [key, e] of Object.entries(core)) {
-      if (e.ref) released.add(e.ref);
-      const inKev = (e.cve ?? []).some((c) => kev.has(c));
-      if (!(e.ref && published.has(e.ref)) && !inKev) continue;
-      records.push(cveRecord(key, e, latest, published.get(e.ref ?? '') ?? now.toISOString()));
+      const g = byRef.get(e.ref ?? '') ?? { entries: [], exploited: [] };
+      byRef.set(e.ref ?? '', g);
+      const kevCve = cvesOf(e).find((c) => kev[c]);
+      if (!kevCve) g.entries.push(e);
+      // Old KEV entries are not news; newer release ranges still flag those versions.
+      else if (recentRefs.has(e.ref ?? '') || kev[kevCve] >= since.slice(0, 10)) {
+        g.exploited.push(kevCve);
+        records.push(exploitedRecord(key, e, latest, kev[kevCve]));
+      }
     }
-
-    const prealerts: string[] = [];
     for (const r of recent) {
-      const out = released.has(r.link);
-      if (out && !prev.prealerts?.includes(r.slug)) continue;
-      if (!out) prealerts.push(r.slug);
-      const md = await fetch(`${BLOG_MD}${r.slug}.md`).then((x) => (x.ok ? x.text() : ''));
-      records.push(prealertRecord(r, parsePrealert(md), out));
+      const g = byRef.get(r.link) ?? { entries: [], exploited: [] };
+      const pre = g.entries.length || g.exploited.length ? { lines: [], severity: 'unknown' as Severity } : parsePrealert(await fetch(`${BLOG_MD}${r.slug}.md`).then((x) => (x.ok ? x.text() : '')));
+      records.push(releaseRecord(r, pre, g.entries, g.exploited, latest));
     }
-    return { records, cursor: JSON.stringify({ latest, prealerts } satisfies NodeCursor) };
+    return { records, cursor: JSON.stringify({ v: 2, latest } satisfies NodeCursor) };
   },
 };
 

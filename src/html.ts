@@ -151,8 +151,7 @@ export const KIND_LABEL: Record<Kind, string> = {
   malicious_package: 'Malicious package',
   compromised_package: 'Compromised package',
   poisoned_action: 'Poisoned GitHub Action',
-  runtime_vuln: 'Runtime security fix',
-  security_release: 'Upcoming security release',
+  security_release: 'Runtime security release',
 };
 const TIER_LABEL: Record<number, string> = { 1: 'ACT NOW', 2: 'WATCH', 3: 'BULK', 4: 'HEADS-UP' };
 
@@ -329,7 +328,7 @@ ${t.affected.length
 <div class="table-box"><table><thead><tr><th scope="col">Ecosystem</th><th scope="col">Package</th><th scope="col">Affected</th><th scope="col">Safe from</th></tr></thead><tbody>
 ${t.affected.map(
   (a) => html`<tr><td>${a.ecosystem}</td><td class="v">${a.package}</td><td class="v">${a.affected}</td>
-<td class="v ${a.fixed.length ? 'safe' : ''}">${a.fixed.length ? a.fixed.join(', ') : ['exploited_vuln', 'runtime_vuln'].includes(t.kind) ? 'No fix listed' : 'None. Remove it.'}</td></tr>`,
+<td class="v ${a.fixed.length ? 'safe' : ''}">${a.fixed.length ? a.fixed.join(', ') : ['exploited_vuln', 'security_release'].includes(t.kind) ? 'No fix listed' : 'None. Remove it.'}</td></tr>`,
 )}</tbody></table></div>
 ${t.kind === 'poisoned_action' ? html`<p class="small">Tags like <code class="mono">@v4</code> can be moved, which is how these attacks work. Only a full commit SHA is safe to trust.</p>` : ''}
 </section>`
@@ -481,7 +480,7 @@ ${sec('What counts as active', html`<p>Not every CVE. An item makes the feed wit
 <li><strong>Act now:</strong> added to CISA's Known Exploited Vulnerabilities catalog in the last 14 days, a hijacked release of a real package, or a poisoned GitHub Action.</li>
 <li><strong>Watch:</strong> older KEV entries, and CVEs whose EPSS score just crossed 0.5 and that map to a package. EPSS is a predicted probability of exploitation in the next 30 days, not proof of attacks.</li>
 <li><strong>Bulk:</strong> packages that were malicious from day one (typosquats). Hidden from the main list but always caught by the dependency checker.</li>
-<li><strong>Heads-up:</strong> Node.js runtime security fixes with no sign of exploitation, and pre-alerts for upcoming Node.js security releases. Shown so you can plan an upgrade, not because attacks are happening. A runtime CVE that lands in KEV moves to Act now or Watch.</li></ul>`)}
+<li><strong>Heads-up:</strong> Node.js security releases, one item per release: a pre-alert before release day, then updated with the fixed versions. Shown so you can plan an upgrade, not because attacks are happening. A Node.js CVE in KEV gets its own Act now or Watch item.</li></ul>`)}
 
 ${sec('Privacy: what happens to your lockfile', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
 <li>Lockfiles you paste or upload are parsed in memory and <strong>never stored or logged</strong>.</li>

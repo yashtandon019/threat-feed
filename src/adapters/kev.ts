@@ -45,6 +45,8 @@ interface KevCursor {
   version?: string;
   /** Every CVE in the catalog (~1.8k ids), so check_dependencies can flag KEV entries older than the feed window. */
   cves?: string[];
+  /** dateAdded per CVE, for sources that link their own records to older KEV entries. */
+  added?: Record<string, string>;
 }
 
 export async function knownExploitedCves(env: Env): Promise<Set<string>> {
@@ -53,12 +55,17 @@ export async function knownExploitedCves(env: Env): Promise<Set<string>> {
 }
 
 /** Re-emits every entry added in the last 30 days when the catalog changes; unchanged ones are skipped by hash. */
+export async function kevDates(env: Env): Promise<Record<string, string>> {
+  const row = await env.DB.prepare("SELECT cursor FROM cursors WHERE source = 'kev'").first<{ cursor: string }>();
+  return row ? ((JSON.parse(row.cursor) as KevCursor).added ?? {}) : {};
+}
+
 export const kev: Adapter = {
   name: 'kev',
   async run(_env, cursor, now) {
     const prev: KevCursor = cursor ? JSON.parse(cursor) : {};
     // Skip the ETag until the CVE list has been stored once, so older cursors get backfilled.
-    const res = await fetch(URL, { headers: prev.etag && prev.cves ? { 'If-None-Match': prev.etag } : {} });
+    const res = await fetch(URL, { headers: prev.etag && prev.added ? { 'If-None-Match': prev.etag } : {} });
     if (res.status === 304) return { records: [], cursor };
     if (!res.ok) throw new Error(`KEV: ${res.status}`);
     const body = (await res.json()) as { catalogVersion: string; vulnerabilities: KevEntry[] };
@@ -66,6 +73,7 @@ export const kev: Adapter = {
       etag: res.headers.get('etag') ?? undefined,
       version: body.catalogVersion,
       cves: body.vulnerabilities.map((v) => v.cveID),
+      added: Object.fromEntries(body.vulnerabilities.map((v) => [v.cveID, v.dateAdded])),
     } satisfies KevCursor);
     if (body.catalogVersion === prev.version) return { records: [], cursor: next };
     return { records: kevRecords(body.vulnerabilities, now), cursor: next };

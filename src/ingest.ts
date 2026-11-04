@@ -10,7 +10,7 @@ import type { Adapter, Affected, Env, Kind, Severity, SourceRecord } from './typ
 export const ADAPTERS: Adapter[] = [kev, epss, ghsa, osvMal, nodejs];
 export const KEV_HOT_DAYS = 14;
 
-const KIND_RANK: Kind[] = ['security_release', 'runtime_vuln', 'exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'];
+const KIND_RANK: Kind[] = ['security_release', 'exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'];
 const SEV_RANK: Severity[] = ['unknown', 'low', 'medium', 'high', 'critical'];
 
 export interface Merged {
@@ -29,8 +29,8 @@ export function computeTier(t: Pick<Merged, 'kind' | 'kev' | 'epss'>, now: Date)
   if (t.kind === 'poisoned_action' || t.kind === 'compromised_package') return 1;
   if (t.kev && now.getTime() - Date.parse(t.kev.dateAdded) <= KEV_HOT_DAYS * 864e5) return 1;
   if (t.kev || (t.epss ?? 0) >= 0.5) return 2;
-  // Heads-up: runtime fixes and release pre-alerts with no sign of exploitation.
-  if (t.kind === 'runtime_vuln' || t.kind === 'security_release') return 4;
+  // Heads-up: runtime security releases with no sign of exploitation.
+  if (t.kind === 'security_release') return 4;
   return 3;
 }
 
@@ -46,7 +46,7 @@ export function merge(records: SourceRecord[]): Merged {
       cur.versions = [...new Set([...cur.versions, ...a.versions])];
     }
   }
-  const kevRec = records.find((r) => r.kev);
+  const kevRec = records.find((r) => r.kev && r.source === 'kev') ?? records.find((r) => r.kev);
   const titled = kevRec ?? records.find((r) => r.title !== r.sourceId) ?? records[0];
   let kind = records.map((r) => r.kind).reduce((a, b) => (KIND_RANK.indexOf(b) > KIND_RANK.indexOf(a) ? b : a));
   if (kind === 'exploited_vuln' && kevRec && [...byPkg.values()].some((a) => a.ecosystem === 'GitHub Actions')) {

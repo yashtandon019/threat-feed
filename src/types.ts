@@ -12,7 +12,7 @@ export interface Env {
   MCP_LIMIT?: RateLimit;
 }
 
-export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action', 'runtime_vuln', 'security_release'] as const;
+export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action', 'security_release'] as const;
 export type Kind = (typeof KINDS)[number];
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
 

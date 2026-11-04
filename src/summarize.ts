@@ -19,11 +19,7 @@ export function templateSummary(m: Pick<Merged, 'kind' | 'title' | 'details' | '
       return `Versions ${versions} of ${pkgs} were published with malicious code. Remove those versions, pin to a known good release, and rotate secrets on any machine or CI runner that installed them.`;
     }
     case 'security_release':
-      return m.details;
-    case 'runtime_vuln': {
-      const fixed = m.affected.flatMap((a) => a.ranges.flatMap((r) => r.events.map((e) => e.fixed).filter(Boolean)));
-      return `${m.title}: fixed in a Node.js security release. No sign of exploitation so far. Upgrade Node.js${fixed.length ? ` to ${fixed.join(', ')} or later on your release line` : ''}.`;
-    }
+      return m.details.split('\n\n')[0];
     case 'poisoned_action':
       return `The GitHub Action ${pkgs} was compromised. Pin it to a known good commit SHA, check recent workflow logs for leaked secrets, and rotate any secrets those workflows could read.`;
     default: {

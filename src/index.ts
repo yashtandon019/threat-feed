@@ -200,8 +200,8 @@ app.get('/llms.txt', (c) => {
 - ${s}/feed.xml (RSS), ${s}/feed.atom, ${s}/feed.json
 
 ## Fields
-- tier: 1 act now, 2 elevated, 3 bulk typosquat malware (hidden by default), 4 heads-up: Node.js runtime fixes with no sign of exploitation and upcoming security release pre-alerts
-- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action, runtime_vuln, security_release. An exploited_vuln with kev null is an EPSS prediction, not observed exploitation
+- tier: 1 act now, 2 elevated, 3 bulk typosquat malware (hidden by default), 4 heads-up: Node.js security releases (pre-alert, then fixed versions) with no sign of exploitation. KEV-listed Node.js CVEs are separate exploited_vuln items
+- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action, security_release (one item per Node.js security release: a pre-alert, then updated with fixed versions). An exploited_vuln with kev null is an EPSS prediction, not observed exploitation
 - summary_source: "ai" summaries are generated from source text and can be wrong; "template" summaries are fixed wording
 `);
 });

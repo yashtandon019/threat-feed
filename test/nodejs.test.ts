@@ -13,6 +13,7 @@ const E = env as unknown as Env;
 const NOW = new Date('2026-11-05T12:00:00Z');
 
 const CORE = {
+  '150': { cve: ['CVE-2023-44487'], vulnerable: '18.x || 20.x', patched: '^18.18.2 || ^20.8.1', ref: 'https://nodejs.org/en/blog/vulnerability/october-2023-security-releases', description: 'HTTP/2 Rapid Reset', severity: 'high' },
   '1': { cve: ['CVE-2024-0001'], vulnerable: '18.x', patched: '^18.19.1', ref: 'https://nodejs.org/en/blog/vulnerability/february-2024-security-releases', description: 'old', severity: 'high' },
   '204': {
     cve: ['CVE-2026-111497'],
@@ -90,7 +91,7 @@ describe('nodejs adapter mapping', () => {
     ]);
   });
 
-  it('emits a heads-up pre-alert and recent CVEs, merging with KEV by CVE', async () => {
+  it('groups each release into one heads-up item and keeps KEV CVEs separate', async () => {
     stubNode();
     const [kevRec] = kevRecords(
       [{ cveID: 'CVE-2026-111497', vendorProject: 'Node.js', product: 'Node.js', vulnerabilityName: 'Brotli OOB write', dateAdded: '2026-11-04', shortDescription: 'x', requiredAction: 'Apply updates.', dueDate: '2026-11-25', knownRansomwareCampaignUse: 'Unknown' }],
@@ -98,25 +99,31 @@ describe('nodejs adapter mapping', () => {
     );
     await upsert(E, kevRec, NOW);
     await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('kev', ?, '') ON CONFLICT (source) DO UPDATE SET cursor = excluded.cursor")
-      .bind(JSON.stringify({ cves: ['CVE-2026-111497'] }))
+      .bind(JSON.stringify({ cves: ['CVE-2026-111497', 'CVE-2023-44487'], added: { 'CVE-2026-111497': '2026-11-04', 'CVE-2023-44487': '2023-10-10' } }))
       .run();
 
     const records = await ingestNode();
-    expect(records.map((r) => r.sourceId).sort()).toEqual(['CVE-2026-106074', 'CVE-2026-111497', 'nodejs-november-2026-security-releases']);
+    expect(records.map((r) => r.sourceId).sort()).toEqual(['CVE-2026-111497', 'nodejs-november-2026-security-releases', 'nodejs-october-2026-security-releases']);
 
     const pre = await getThreat(E, 'nodejs-november-2026-security-releases');
     expect(pre).toMatchObject({ kind: 'security_release', tier: 4, severity: 'high' });
     expect(pre!.title).toContain('26.x, 24.x, 22.x');
 
+    const oct = await getThreat(E, 'CVE-2026-106074');
+    expect(oct).toMatchObject({ id: 'nodejs-october-2026-security-releases', kind: 'security_release', tier: 4 });
+    expect(oct!.summary).toContain('CVE-2026-111497 is known to be exploited');
+
     const kevThreat = await getThreat(E, 'CVE-2026-111497');
     expect(kevThreat).toMatchObject({ kind: 'exploited_vuln', tier: 1 });
+    expect(kevThreat!.title).toContain('Brotli OOB write');
     expect(kevThreat!.affected.find((a) => a.ecosystem === 'Node.js')!.fixed).toEqual(['22.23.4', '24.22.1', '26.12.1']);
 
-    expect(await getThreat(E, 'CVE-2026-106074')).toMatchObject({ kind: 'runtime_vuln', tier: 4 });
+    // An old KEV entry from an old release is not news.
+    expect(await getThreat(E, 'CVE-2023-44487')).toBeNull();
 
     const feed = await listThreats(E, parseFilters({}, NOW));
-    expect(feed.map((t) => t.id)).toContain('nodejs-november-2026-security-releases');
-    expect((await listThreats(E, parseFilters({ tier: 1 }, NOW))).map((t) => t.id)).not.toContain('CVE-2026-106074');
+    expect(feed.filter((t) => t.kind === 'security_release')).toHaveLength(2);
+    expect((await listThreats(E, parseFilters({ tier: 1 }, NOW))).some((t) => t.kind === 'security_release')).toBe(false);
 
     const page = await (await app.fetch(new Request('http://x/'), E, createExecutionContext())).text();
     expect(page).toContain('HEADS-UP');
@@ -124,22 +131,32 @@ describe('nodejs adapter mapping', () => {
     expect(detail).not.toContain('<script>alert');
   });
 
-  it('withdraws the pre-alert once its CVEs are published', async () => {
+  it('updates the pre-alert in place once its CVEs are published', async () => {
     stubNode();
     await ingestNode();
     const nov = 'https://nodejs.org/en/blog/vulnerability/november-2026-security-releases';
     stubNode({ ...CORE, '300': { cve: ['CVE-2026-200000'], vulnerable: '30.x', patched: '^30.1.1', ref: nov, description: 'new', severity: 'high' } });
     await ingestNode(new Date('2026-11-12T12:00:00Z'));
-    expect((await getThreat(E, 'nodejs-november-2026-security-releases'))!.status).toBe('withdrawn');
-    expect(await getThreat(E, 'CVE-2026-200000')).toMatchObject({ kind: 'runtime_vuln', tier: 4 });
+    const t = await getThreat(E, 'CVE-2026-200000');
+    expect(t).toMatchObject({ id: 'nodejs-november-2026-security-releases', status: 'active', kind: 'security_release', tier: 4 });
+    expect(t!.title).toContain('1 fix');
+    expect(t!.affected[0].fixed).toEqual(['30.1.1']);
+  });
+
+  it('drops per-CVE items left by the first version', async () => {
+    stubNode();
+    await upsert(E, { source: 'nodejs', sourceId: 'CVE-2026-1', aliases: ['CVE-2026-1'], kind: 'security_release', title: 't', details: '', severity: 'low', affected: [], url: '', published: '' }, NOW);
+    await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('nodejs', '{\"latest\":{}}', '') ON CONFLICT (source) DO UPDATE SET cursor = excluded.cursor").run();
+    await ingestNode();
+    expect(await getThreat(E, 'CVE-2026-1')).toBeNull();
+    expect(await getThreat(E, 'nodejs-october-2026-security-releases')).not.toBeNull();
   });
 });
 
 describe('heads-up tiering', () => {
-  it('keeps runtime fixes below exploitation evidence', () => {
-    expect(computeTier({ kind: 'runtime_vuln' }, NOW)).toBe(4);
+  it('keeps security releases below exploitation evidence', () => {
     expect(computeTier({ kind: 'security_release' }, NOW)).toBe(4);
-    expect(computeTier({ kind: 'runtime_vuln', epss: 0.7 }, NOW)).toBe(2);
+    expect(computeTier({ kind: 'security_release', epss: 0.7 }, NOW)).toBe(2);
   });
 });
 
@@ -169,6 +186,7 @@ describe('runtime matching', () => {
     );
     const body = (await res.json()) as { matches: { ecosystem: string; fix: { nearest_safe?: string } }[] };
     expect(body.matches.length).toBeGreaterThan(0);
+    expect(body.matches.length).toBeLessThanOrEqual(2);
     expect(body.matches.every((m) => m.ecosystem === 'Node.js' && m.fix.nearest_safe === '22.23.4')).toBe(true);
   });
 
@@ -185,8 +203,8 @@ describe('runtime matching', () => {
       ).json()) as { matches: { threat_id: string; fix: { nearest_safe?: string; latest_release?: string } }[] };
     expect((await check('22.23.4')).matches).toHaveLength(0);
     const eol = await check('20.1.0');
-    expect(eol.matches.map((m) => m.fix.nearest_safe)).toEqual(['22.23.4']);
+    expect(eol.matches.find((m) => m.threat_id === 'nodejs-october-2026-security-releases')!.fix.nearest_safe).toBe('22.23.4');
     const n26 = await check('26.0.0');
-    expect(n26.matches[0].fix).toMatchObject({ nearest_safe: '26.12.1', latest_release: '26.13.0' });
+    expect(n26.matches.find((m) => m.threat_id === 'CVE-2026-111497')!.fix).toMatchObject({ nearest_safe: '26.12.1', latest_release: '26.13.0' });
   });
 });

@@ -16,7 +16,7 @@ function server(env: Env) {
   s.registerTool(
     'list_feed',
     {
-      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, observed) and likely-to-be-exploited ones (EPSS over 0.5, predicted only; kev is null) and malicious or compromised packages and GitHub Actions, plus Node.js runtime security fixes and release pre-alerts. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware, 4 = heads-up (runtime fixes with no sign of exploitation, upcoming security releases; included unless min_tier is 1). ${UNTRUSTED}`,
+      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, observed) and likely-to-be-exploited ones (EPSS over 0.5, predicted only; kev is null) and malicious or compromised packages and GitHub Actions, plus one item per Node.js security release. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware, 4 = heads-up (Node.js security releases with no sign of exploitation; included unless min_tier is 1). ${UNTRUSTED}`,
       inputSchema: z.object({
         ecosystem: z.array(z.string()).optional().describe('npm, PyPI, Go, crates.io, Maven, NuGet, RubyGems, Packagist, GitHub Actions, Node.js'),
         kind: z.array(z.enum(KINDS)).optional(),
