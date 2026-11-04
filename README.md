@@ -52,7 +52,7 @@ request   -> Hono (Cache API, 60 s) -> D1;  check_dependencies -> OSV querybatch
 
 ## Local development
 
-Requires Node 22+ (`nvm use`). No Cloudflare account is needed locally.
+Requires Node 24 (`nvm use` reads `.nvmrc`). No Cloudflare account is needed locally.
 
 ```bash
 npm install

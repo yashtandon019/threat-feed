@@ -24,7 +24,8 @@ export function kevRecords(entries: KevEntry[], now: Date): SourceRecord[] {
       sourceId: e.cveID,
       aliases: [e.cveID],
       kind: 'exploited_vuln',
-      title: `${e.vendorProject} ${e.product}: ${e.vulnerabilityName}`,
+      // KEV often repeats the vendor in the product name ("WordPress" + "WordPress Core").
+      title: `${e.product.startsWith(e.vendorProject) ? e.product : `${e.vendorProject} ${e.product}`}: ${e.vulnerabilityName}`,
       details: e.shortDescription,
       severity: 'high',
       affected: [],
