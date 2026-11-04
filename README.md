@@ -42,7 +42,7 @@ Threats stay in the default feed for 7 days after their last signal (`since` cha
 ```
 cron */10 -> adapters (kev, epss, osv_mal) -> SourceRecord[] -> upsert: hash check, link CVE to packages via OSV,
           dedupe by alias, merge, tier -> D1 -> summarize (tier 1-2 only, when sources change)
-request   -> Hono (Cache API, 60 s) -> D1;  check_dependencies -> OSV querybatch -> keep active threats + any MAL hit
+request   -> Hono (Cache API, 60 s) -> D1;  check_dependencies -> OSV querybatch -> keep active threats + any MAL hit + any CVE in the full KEV catalog
 ```
 
 - **Adapters** live in `src/adapters/`, one file per source. Each returns `SourceRecord[]` (see `src/types.ts`) and a cursor string. To add a source, write one adapter and add it to `ADAPTERS` in `src/ingest.ts`.
@@ -74,7 +74,7 @@ For AI summaries, put your key in `.dev.vars` (git-ignored):
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Without a key, every item keeps its template summary. The model is `SUMMARY_MODEL` in `wrangler.jsonc`.
+Without a key, every item keeps its template summary. The model is `SUMMARY_MODEL` in `wrangler.jsonc`: Claude Haiku 5.5, the cheapest tier, at well under $1/month for ~20 summaries a day. A refusal keeps the template text.
 
 ## Tests
 
@@ -109,7 +109,6 @@ npx wrangler deploy
 
 ## Known limits (phase 1)
 
-- `check_dependencies` only knows KEV entries from the last 30 days. An older KEV-listed package (for example `tj-actions/changed-files`) is not reported unless OSV also has a MAL entry for it.
 - Action refs pinned to a commit SHA or a moving tag (`@v4`) are returned as `unresolved`, not checked.
 - Unpinned `requirements.txt` lines are returned as `unresolved`.
 - Maven, NuGet, RubyGems and Packagist matches list fixed versions without picking the nearest one.

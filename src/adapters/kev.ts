@@ -1,4 +1,4 @@
-import type { Adapter, SourceRecord } from '../types';
+import type { Adapter, Env, SourceRecord } from '../types';
 
 const URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 const WINDOW_DAYS = 30;
@@ -39,16 +39,33 @@ export function kevRecords(entries: KevEntry[], now: Date): SourceRecord[] {
     }));
 }
 
+interface KevCursor {
+  etag?: string;
+  version?: string;
+  /** Every CVE in the catalog (~1.8k ids), so check_dependencies can flag KEV entries older than the feed window. */
+  cves?: string[];
+}
+
+export async function knownExploitedCves(env: Env): Promise<Set<string>> {
+  const row = await env.DB.prepare("SELECT cursor FROM cursors WHERE source = 'kev'").first<{ cursor: string }>();
+  return new Set(row ? ((JSON.parse(row.cursor) as KevCursor).cves ?? []) : []);
+}
+
 /** Re-emits every entry added in the last 30 days when the catalog changes; unchanged ones are skipped by hash. */
 export const kev: Adapter = {
   name: 'kev',
   async run(_env, cursor, now) {
-    const prev = cursor ? (JSON.parse(cursor) as { etag?: string; version?: string }) : {};
-    const res = await fetch(URL, { headers: prev.etag ? { 'If-None-Match': prev.etag } : {} });
+    const prev: KevCursor = cursor ? JSON.parse(cursor) : {};
+    // Skip the ETag until the CVE list has been stored once, so older cursors get backfilled.
+    const res = await fetch(URL, { headers: prev.etag && prev.cves ? { 'If-None-Match': prev.etag } : {} });
     if (res.status === 304) return { records: [], cursor };
     if (!res.ok) throw new Error(`KEV: ${res.status}`);
     const body = (await res.json()) as { catalogVersion: string; vulnerabilities: KevEntry[] };
-    const next = JSON.stringify({ etag: res.headers.get('etag') ?? undefined, version: body.catalogVersion });
+    const next = JSON.stringify({
+      etag: res.headers.get('etag') ?? undefined,
+      version: body.catalogVersion,
+      cves: body.vulnerabilities.map((v) => v.cveID),
+    } satisfies KevCursor);
     if (body.catalogVersion === prev.version) return { records: [], cursor: next };
     return { records: kevRecords(body.vulnerabilities, now), cursor: next };
   },

@@ -181,3 +181,37 @@ describe('manual ingest endpoint', () => {
     expect((await post({ ...E, INGEST_TOKEN: 'right' }, 'Bearer wrong')).status).toBe(401);
   });
 });
+
+describe('older KEV entries in check_dependencies', () => {
+  it('flags a dependency whose advisory is a CVE in the full KEV catalog, even outside the feed window', async () => {
+    await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('kev', ?, '') ON CONFLICT (source) DO UPDATE SET cursor = excluded.cursor")
+      .bind(JSON.stringify({ version: 'x', cves: ['CVE-2020-0001'] }))
+      .run();
+    const old: OsvVuln = {
+      id: 'GHSA-old0-kev0-0001',
+      summary: 'Old exploited bug in oldpkg',
+      aliases: ['CVE-2020-0001'],
+      modified: '2020-01-01T00:00:00Z',
+      affected: [{ package: { ecosystem: 'npm', name: 'oldpkg' }, ranges: [{ type: 'SEMVER', events: [{ introduced: '0' }, { fixed: '2.0.1' }] }] }],
+    };
+    const plain: OsvVuln = { ...old, id: 'GHSA-not0-kev0-0002', aliases: ['CVE-2020-0002'] };
+    stubOsv({ [old.id]: old, [plain.id]: plain }, (q) => (q.package.name === 'oldpkg' ? [old.id] : [plain.id]));
+    const res = await app.fetch(
+      new Request('http://x/api/v1/check', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ packages: [{ ecosystem: 'npm', name: 'oldpkg', version: '1.0.0' }, { ecosystem: 'npm', name: 'other', version: '1.0.0' }] }),
+      }),
+      E,
+    );
+    const body = (await res.json()) as { matches: { name: string; threat_id: string; kind: string; url: string; fix: object }[] };
+    expect(body.matches).toHaveLength(1);
+    expect(body.matches[0]).toMatchObject({
+      name: 'oldpkg',
+      threat_id: 'CVE-2020-0001',
+      kind: 'exploited_vuln',
+      url: 'https://osv.dev/vulnerability/GHSA-old0-kev0-0001',
+      fix: { action: 'upgrade', nearest_safe: '2.0.1' },
+    });
+  });
+});

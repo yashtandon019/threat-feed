@@ -1,5 +1,6 @@
+import { knownExploitedCves } from './adapters/kev';
 import { isCompromised } from './adapters/osv_mal';
-import { affectedOf, getVuln, queryBatch } from './osv';
+import { affectedOf, getVuln, queryBatch, type OsvVuln } from './osv';
 import { detectFormat, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
 import { normalizeEcosystem, type Env } from './types';
 import { nearestSafe } from './versions';
@@ -68,7 +69,7 @@ function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[]
 
 /**
  * OSV does the per-ecosystem version matching. We keep only hits that are active threats in our feed,
- * plus every MAL- hit: a known malicious package is always worth reporting, even if it predates our window.
+ * plus every MAL- hit and every CVE in the full KEV catalog: those are always worth reporting, even if they predate our window.
  */
 export async function checkDependencies(env: Env, input: CheckInput) {
   const { packages, unresolved } = collect(input);
@@ -89,37 +90,53 @@ export async function checkDependencies(env: Env, input: CheckInput) {
     for (const r of rows) active.set(r.alias, r);
   }
 
+  // Older KEV entries aren't in the feed window, but an exploited dependency must never come back clean.
+  const kev = await knownExploitedCves(env);
+  const toFetch = allIds.filter((id) => active.has(id) || id.startsWith('MAL-') || kev.size);
+  const vulns = new Map<string, OsvVuln | null>();
+  for (let i = 0; i < toFetch.length; i += 25) {
+    const chunk = toFetch.slice(i, i + 25);
+    (await Promise.all(chunk.map(getVuln))).forEach((v, j) => vulns.set(chunk[j], v));
+  }
+
   const matches: Match[] = [];
   for (const [i, ids] of hits.entries()) {
     const pkg = packages[i];
     const seen = new Set<string>();
     for (const vulnId of ids) {
       const t = active.get(vulnId);
-      if (!t && !vulnId.startsWith('MAL-')) continue;
-      if (t && seen.has(t.id)) continue;
-      const v = await getVuln(vulnId);
+      const v = vulns.get(vulnId);
       if (!v || v.withdrawn) continue;
+      const isMal = vulnId.startsWith('MAL-');
+      const kevCve = [vulnId, ...(v.aliases ?? [])].find((a) => kev.has(a));
+      if (!t && !isMal && !kevCve) continue;
+      const id = t?.id ?? (isMal ? vulnId : kevCve!);
+      if (seen.has(id)) continue;
       const aff = affectedOf(v).find((a) => a.ecosystem === pkg.ecosystem && a.package === pkg.name);
       const ranges = aff?.ranges ?? [];
       const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));
       let fix: Fix;
-      if (vulnId.startsWith('MAL-') && !fixed.length) {
+      if (isMal && !fixed.length) {
         const hijacked = t ? t.kind === 'compromised_package' : isCompromised(aff ? [aff] : []);
         fix = hijacked && aff?.versions.length ? { action: 'pin-away', avoid_versions: aff.versions } : { action: 'remove' };
       } else {
         const safe = nearestSafe(pkg.ecosystem, pkg.version, ranges);
         fix = safe ? { action: 'upgrade', nearest_safe: safe } : { action: 'upgrade', fixed_versions: fixed };
       }
-      const id = t?.id ?? vulnId;
       seen.add(id);
       matches.push({
         ...pkg,
         threat_id: id,
-        kind: t?.kind ?? 'malicious_package',
-        tier: t?.tier ?? 1,
+        kind: t?.kind ?? (isMal ? 'malicious_package' : 'exploited_vuln'),
+        tier: t?.tier ?? (isMal ? 1 : 2),
         title: t?.title ?? v.summary ?? vulnId,
-        summary: t?.summary ?? 'Known malicious package. Remove it and rotate any secrets on machines that installed it.',
-        url: `${env.SITE_URL}/t/${encodeURIComponent(id)}`,
+        summary:
+          t?.summary ??
+          (isMal
+            ? 'Known malicious package. Remove it and rotate any secrets on machines that installed it.'
+            : `${id} is in CISA's Known Exploited Vulnerabilities catalog: attackers have used it in the wild. Upgrade to a fixed version.`),
+        // Only threats in our feed have a page here; the rest link to OSV.
+        url: t ? `${env.SITE_URL}/t/${encodeURIComponent(id)}` : `https://osv.dev/vulnerability/${encodeURIComponent(vulnId)}`,
         fix,
       });
     }
