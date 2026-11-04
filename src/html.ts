@@ -470,7 +470,7 @@ ${sec('What counts as active', html`<p>Not every CVE. An item makes the feed onl
 ${sec('Privacy: what happens to your lockfile', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
 <li>Lockfiles you paste or upload are parsed in memory and <strong>never stored or logged</strong>.</li>
 <li>To match versions, the <strong>package names and versions</strong> (not the file) are sent to <a href="https://osv.dev">OSV.dev</a>, Google's open vulnerability database. Private package names in your lockfile would be part of that.</li>
-<li>No accounts, no cookies, no analytics or tracking scripts.</li>
+<li>No accounts and no cookies. Visits are counted with Cloudflare Web Analytics, which is cookie-free and does not track you across sites.</li>
 <li>Cloudflare, which hosts the site, keeps standard request logs. Fonts load from Google Fonts.</li>
 <li>Checks are rate-limited per network address to keep the service fair.</li></ul>`)}
 

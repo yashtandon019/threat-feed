@@ -8,5 +8,5 @@ export default defineConfig({
       miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations('./migrations') } },
     })),
   ],
-  test: { setupFiles: ['./test/setup.ts'] },
+  test: { setupFiles: ['./test/setup.ts'], include: ['test/**/*.test.ts'] },
 });

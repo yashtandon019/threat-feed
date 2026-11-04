@@ -167,7 +167,7 @@ describe('outputs', () => {
 
   it('sends a CSP and serves the page script from /app.js', async () => {
     const res = await app.fetch(new Request('http://x/about'), E, createExecutionContext());
-    expect(res.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(res.headers.get('content-security-policy')).toContain("script-src 'self' https://static.cloudflareinsights.com");
     expect(await res.text()).not.toMatch(/<script>/);
     expect((await app.fetch(new Request('http://x/app.js'), E, createExecutionContext())).status).toBe(200);
   });

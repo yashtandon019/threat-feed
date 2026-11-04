@@ -1,11 +1,11 @@
 import { Hono, type Context } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { cache } from 'hono/cache';
+import { secureHeaders } from 'hono/secure-headers';
 import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
-import { secureHeaders } from 'hono/secure-headers';
 import { aboutPage, checkPage, FAVICON_SVG, feedPage, JS, threatPage } from './html';
 import { runIngest } from './ingest';
 import { mcpFetch } from './mcp';
@@ -20,7 +20,9 @@ app.use(
   secureHeaders({
     contentSecurityPolicy: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      // Cloudflare Web Analytics: beacon script and its reporting endpoint.
+      scriptSrc: ["'self'", 'https://static.cloudflareinsights.com'],
+      connectSrc: ["'self'", 'https://cloudflareinsights.com'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ['https://fonts.gstatic.com'],
       imgSrc: ["'self'", 'data:'],
@@ -135,7 +137,7 @@ app.get('/favicon.ico', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image
 
 app.get('/app.js', (c) => c.body(JS, 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' }));
 
-app.get('/about',(c) => c.html(aboutPage(site(c.env))));
+app.get('/about', (c) => c.html(aboutPage(site(c.env))));
 
 app.get('/t/:id', async (c) => {
   const t = await getThreat(c.env, c.req.param('id'));
