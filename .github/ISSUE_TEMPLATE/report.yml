@@ -1,0 +1,30 @@
+name: Report a problem
+description: A false positive, a missing threat, a wrong summary, or anything else that looks off.
+labels: [report]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      options:
+        - False positive (flagged, but not actually affected)
+        - Missing threat (should be in the feed)
+        - Wrong or misleading summary
+        - Wrong versions or safe version
+        - Site or API bug
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: threat_id
+    attributes:
+      label: Threat ID
+      description: CVE, GHSA or MAL id, if this is about a specific entry.
+      placeholder: CVE-2025-30066
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What you expected and what you saw. Links to sources help. Please don't paste private lockfiles.
+    validations:
+      required: true

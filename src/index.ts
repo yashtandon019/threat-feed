@@ -5,7 +5,7 @@ import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
-import { checkPage, feedPage, threatPage } from './html';
+import { aboutPage, checkPage, feedPage, threatPage } from './html';
 import { runIngest } from './ingest';
 import { mcpFetch } from './mcp';
 import type { Format } from './parsers';
@@ -24,7 +24,27 @@ app.use(async (c, next) => {
   await next();
 });
 
-app.all('/mcp', (c) => mcpFetch(c.env, c.req.raw));
+/** Per-IP rate limit; false means the caller is over the limit. No binding (tests) means no limit. */
+async function allowed(c: Context<{ Bindings: Env }>, binding: 'CHECK_LIMIT' | 'MCP_LIMIT'): Promise<boolean> {
+  const rl = c.env[binding];
+  if (!rl) return true;
+  return (await rl.limit({ key: c.req.header('cf-connecting-ip') ?? 'unknown' })).success;
+}
+const tooMany = (c: Context) => c.json({ error: 'Too many requests. Try again in a minute.' }, 429, { 'retry-after': '60' });
+
+app.all('/mcp', async (c) => ((await allowed(c, 'MCP_LIMIT')) ? mcpFetch(c.env, c.req.raw) : tooMany(c)));
+
+// For uptime monitors: 503 when the cron hasn't completed a run for 30 minutes.
+app.get('/health', async (c) => {
+  const s = await sourceStatus(c.env);
+  const minutes = s.lastRun ? Math.round((Date.now() - Date.parse(s.lastRun)) / 60000) : null;
+  const ok = minutes !== null && minutes <= 30;
+  return c.json(
+    { ok, last_run: s.lastRun, minutes_since_last_run: minutes, kev_catalog: s.kevVersion, epss_date: s.epssDate },
+    ok ? 200 : 503,
+    { 'cache-control': 'no-store' },
+  );
+});
 
 // Manual run of the cron job. Awaited in the request: waitUntil work is cut off ~30 s after the response.
 app.post(
@@ -39,6 +59,7 @@ app.post(
 );
 
 app.post('/api/v1/check', async (c) => {
+  if (!(await allowed(c, 'CHECK_LIMIT'))) return tooMany(c);
   let input: CheckInput;
   if ((c.req.header('content-type') ?? '').includes('application/json')) {
     input = await c.req.json<CheckInput>().catch(() => ({}));
@@ -54,7 +75,7 @@ app.post('/api/v1/check', async (c) => {
   }
 });
 
-const site = (env: Env) => ({ name: env.SITE_NAME, url: env.SITE_URL });
+const site = (env: Env) => ({ name: env.SITE_NAME, url: env.SITE_URL, repo: env.REPO_URL });
 
 // Accepts both ?ecosystem=npm,PyPI and repeated ?ecosystem=npm&ecosystem=PyPI (what HTML forms send).
 function filtersFrom(c: Context<{ Bindings: Env }>) {
@@ -68,6 +89,7 @@ app.post('/check', async (c) => {
   const manifest = file ? await file.text() : String(body.manifest ?? '');
   const format = String(body.format ?? '');
   const view = { manifest: file ? '' : manifest, format };
+  if (!(await allowed(c, 'CHECK_LIMIT'))) return c.html(checkPage({ ...view, error: 'Too many checks from your network. Try again in a minute.' }, site(c.env)), 429);
   if (!manifest.trim()) return c.html(checkPage({ ...view, error: 'Paste a lockfile or choose a file first.' }, site(c.env)), 400);
   try {
     const result = await checkDependencies(c.env, { manifest, format: (format || undefined) as Format | undefined, filename: file?.name });
@@ -88,6 +110,8 @@ app.get('/', async (c) => {
 });
 
 app.get('/check', (c) => c.html(checkPage({ manifest: '', format: '' }, site(c.env))));
+
+app.get('/about', (c) => c.html(aboutPage(site(c.env))));
 
 app.get('/t/:id', async (c) => {
   const t = await getThreat(c.env, c.req.param('id'));

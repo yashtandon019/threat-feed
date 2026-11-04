@@ -5,6 +5,11 @@ export interface Env {
   SUMMARY_MODEL: string;
   SITE_URL: string;
   SITE_NAME: string;
+  REPO_URL: string;
+  /** Optional; lifts GitHub's 60 requests/hour unauthenticated limit for the ghsa adapter. */
+  GITHUB_TOKEN?: string;
+  CHECK_LIMIT?: RateLimit;
+  MCP_LIMIT?: RateLimit;
 }
 
 export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'] as const;

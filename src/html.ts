@@ -5,6 +5,15 @@ import type { Unresolved } from './parsers';
 import { ECOSYSTEMS, KINDS, type Kind } from './types';
 
 type ThreatDetail = NonNullable<Awaited<ReturnType<typeof getThreat>>>;
+export interface Site {
+  name: string;
+  url: string;
+  repo: string;
+}
+
+/** Prefilled GitHub issue form (.github/ISSUE_TEMPLATE/report.yml). */
+const reportUrl = (site: Site, threatId?: string) =>
+  `${site.repo}/issues/new?template=report.yml${threatId ? `&threat_id=${encodeURIComponent(threatId)}&title=${encodeURIComponent(`Report: ${threatId}`)}` : ''}`;
 
 const FONTS =
   'https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap';
@@ -175,7 +184,7 @@ function flags(t: ThreatOut, now = new Date()) {
 
 const sourcesOf = (t: ThreatOut) => [t.kev && 'CISA KEV', t.epss && 'EPSS', t.affected.length && 'OSV'].filter(Boolean).join(', ') || 'OSV';
 
-function layout(title: string, site: { name: string; url: string }, active: 'feed' | 'check' | '', body: unknown, status?: SourceStatus) {
+function layout(title: string, site: Site, active: 'feed' | 'check' | 'about' | '', body: unknown, status?: SourceStatus) {
   const dot = site.name.indexOf('.');
   const brand = dot > 0 ? html`${site.name.slice(0, dot)}<span>${site.name.slice(dot)}</span>` : site.name;
   const stale = status?.lastRun ? Date.now() - Date.parse(status.lastRun) > 40 * 60000 : true;
@@ -191,6 +200,7 @@ function layout(title: string, site: { name: string; url: string }, active: 'fee
 <a href="/" ${active === 'feed' ? raw('aria-current="page"') : ''}>Feed</a>
 <a href="/check" ${active === 'check' ? raw('aria-current="page"') : ''}>Check dependencies</a>
 <a href="/api/v1/threats">API</a><a href="/#mcp">MCP</a><a href="/llms.txt">llms.txt</a>
+<a href="/about" ${active === 'about' ? raw('aria-current="page"') : ''}>About</a>
 </nav><span class="free">Free. No login.</span></div></header>
 ${status
   ? html`<div class="status"><div class="wrap" role="status">
@@ -202,7 +212,8 @@ ${status.epssDate ? html`<span>EPSS scores ${status.epssDate}</span>` : ''}
 ${body}
 <footer class="wrap"><p class="small">Data: <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog">CISA KEV</a>, <a href="https://www.first.org/epss/">FIRST EPSS</a>,
 <a href="https://osv.dev">OSV</a>, OpenSSF Malicious Packages (Apache-2.0) and the GitHub Advisory Database (CC-BY 4.0).
-Summaries marked AI are generated from those sources and can be wrong; check the linked sources.</p></footer>
+Summaries marked AI are generated from those sources and can be wrong; check the linked sources.
+<a href="/about">About and privacy</a> · <a href="${reportUrl(site)}">Report a problem</a> · <a href="${site.repo}">Source code</a></p></footer>
 <script>${raw(JS)}</script></body></html>`;
 }
 
@@ -212,7 +223,7 @@ export function feedPage(
   bulk: { ecosystem: string; n: number }[],
   f: Filters,
   status: SourceStatus,
-  site: { name: string; url: string },
+  site: Site,
 ) {
   const windowLabel = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days' }[q.since] ?? 'this window';
   const bulkTotal = bulk.reduce((n, b) => n + b.n, 0);
@@ -276,7 +287,7 @@ Mostly typosquats with no real users, so they stay out of the main list. Depende
   );
 }
 
-export function threatPage(t: ThreatDetail, site: { name: string; url: string }) {
+export function threatPage(t: ThreatDetail, site: Site) {
   const events: [string, string][] = [[t.first_seen, 'First seen here.']];
   if (t.kev) {
     events.push([t.kev.date_added, `Added to CISA's Known Exploited Vulnerabilities catalog${t.kev.ransomware ? ', with known ransomware use' : ''}.`]);
@@ -333,6 +344,7 @@ ${t.kind === 'poisoned_action' ? html`<p class="small">Tags like <code class="mo
 <div class="box" id="sources"><h2 class="label">Sources</h2>
 ${t.sources.map((s) => html`<a href="${s.url}" style="font-size:14px">${s.name === 'kev' ? 'CISA KEV' : s.name === 'epss' ? 'FIRST EPSS' : 'OSV'}: ${s.id}</a>`)}</div>
 <a class="block-btn" href="/check">Check my dependencies for this</a>
+<a class="btn" style="justify-content:center" href="${reportUrl(site, t.id)}">Report a problem with this entry</a>
 </aside></div></main>`,
   );
 }
@@ -362,7 +374,23 @@ function fixText(m: Match): [string, string] {
   return [f.fixed_versions?.length ? f.fixed_versions.join(', ') : 'No fix listed', 'Check the vendor advisory'];
 }
 
-export function checkPage(v: CheckView, site: { name: string; url: string }) {
+/** Copy-paste workflow; also shown in the README. Swap the lockfile name for other ecosystems. */
+export const ciWorkflow = (siteUrl: string) => `# .github/workflows/compromised.yml
+name: Active threat check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # pin to a full commit SHA
+      - name: Check dependencies against active threats
+        run: |
+          curl -sf --data-binary @package-lock.json \\
+            "${siteUrl}/api/v1/check?filename=package-lock.json" > result.json
+          jq '.matches[] | "\\(.name)@\\(.version): \\(.title) (\\(.threat_id))"' result.json
+          jq -e '.matches | length == 0' result.json > /dev/null`;
+
+export function checkPage(v: CheckView, site: Site) {
   const r = v.result;
   return layout(
     'Check dependencies',
@@ -398,6 +426,7 @@ ${r.matches.length
 <span class="kind">${KIND_LABEL[m.kind as Kind] ?? m.kind} · ${m.ecosystem}</span><a class="mono" href="${m.url}">${m.threat_id}</a></div>
 <p>${m.summary}</p>
 <div class="fix"><div><span>Safe version</span><strong>${safe}</strong></div><div><span>Then</span><strong>${then}</strong></div></div>
+<span class="small">Think this is wrong? <a href="${reportUrl(site, m.threat_id)}">Report a false positive</a></span>
 </div></article>`;
     })
   : html`<div class="empty">No active threats found in these ${r.scanned} packages.</div>`}
@@ -407,12 +436,52 @@ ${r.unresolved.length
   : ''}`
   : html`<div class="empty">Results appear here. Older advisories with no sign of active attacks are left out on purpose.</div>`}
 <div class="snips">
-<div><h2 class="label">From CI</h2><pre>curl -sf --data-binary @package-lock.json \\
+<div><h2 class="label">From the command line</h2><pre>curl -sf --data-binary @package-lock.json \\
   "${site.url}/api/v1/check?filename=package-lock.json"</pre></div>
 <div><h2 class="label">From an agent</h2><pre>MCP  ${site.url}/mcp
 tool check_dependencies
      packages: [{ ecosystem, name, version }]</pre></div></div>
+<div id="ci"><h2 class="label">In GitHub Actions: fail the build on active threats</h2><pre>${ciWorkflow(site.url)}</pre></div>
 </section></div></main>`,
   );
 }
 
+
+export function aboutPage(site: Site) {
+  const sec = (title: string, body: unknown) => html`<section class="panel" style="display:flex;flex-direction:column;gap:10px"><h2 class="sec">${title}</h2>${body}</section>`;
+  return layout(
+    `About ${site.name}`,
+    site,
+    'about',
+    html`<main class="wrap" style="max-width:860px">
+<section style="display:flex;flex-direction:column;gap:8px"><h1>About ${site.name}</h1>
+<p class="lede">A free, no-login feed of security threats that are being exploited right now, with a dependency checker for people and AI agents.</p></section>
+
+${sec('What counts as active', html`<p>Not every CVE. An item makes the feed only with evidence of real attacks or malware:</p>
+<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">
+<li><strong>Act now:</strong> added to CISA's Known Exploited Vulnerabilities catalog in the last 14 days, a hijacked release of a real package, or a poisoned GitHub Action.</li>
+<li><strong>Watch:</strong> older KEV entries, and CVEs whose EPSS exploitation score just crossed 0.5 and that map to a package.</li>
+<li><strong>Bulk:</strong> packages that were malicious from day one (typosquats). Hidden from the main list but always caught by the dependency checker.</li></ul>`)}
+
+${sec('Privacy: what happens to your lockfile', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
+<li>Lockfiles you paste or upload are parsed in memory and <strong>never stored or logged</strong>.</li>
+<li>To match versions, the <strong>package names and versions</strong> (not the file) are sent to <a href="https://osv.dev">OSV.dev</a>, Google's open vulnerability database. Private package names in your lockfile would be part of that.</li>
+<li>No accounts, no cookies, no analytics or tracking scripts.</li>
+<li>Cloudflare, which hosts the site, keeps standard request logs. Fonts load from Google Fonts.</li>
+<li>Checks are rate-limited per network address to keep the service fair.</li></ul>`)}
+
+${sec('Sources and licenses', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">
+<li><a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog">CISA Known Exploited Vulnerabilities</a></li>
+<li><a href="https://www.first.org/epss/">FIRST EPSS</a> exploitation scores</li>
+<li><a href="https://osv.dev">OSV</a>, including <a href="https://github.com/ossf/malicious-packages">OpenSSF Malicious Packages</a> (Apache-2.0)</li>
+<li><a href="https://github.com/advisories">GitHub Advisory Database</a> (CC-BY 4.0)</li></ul>
+<p>Data is refreshed every 10 minutes. ${site.name} is independent and not affiliated with any of these organizations.</p>`)}
+
+${sec('AI summaries', html`<p>Summaries marked AI are written by Claude (Anthropic) from the public advisory text only, and regenerated when a source changes. Only public advisory data is sent to the model, never anything you paste. They can be wrong, so each one links to its sources.</p>`)}
+
+${sec('Who runs this', html`<p>${site.name} is an independent side project, provided as is with no warranty. Use it as an extra early-warning signal alongside your own security tooling, not instead of it. The <a href="${site.repo}">source code is public</a>.</p>`)}
+
+${sec('Found a mistake?', html`<p>False positives and missing threats matter on a security tool. Please <a href="${reportUrl(site)}">report it on GitHub</a>; every threat page and check result also has a report link.</p>`)}
+</main>`,
+  );
+}

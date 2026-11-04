@@ -3,7 +3,7 @@
 A free, no-login live feed of security threats that are happening now, not every CVE:
 
 - **Exploited vulnerabilities:** new CISA KEV entries, and CVEs whose EPSS score just crossed 0.5 (only when they map to a package).
-- **Supply chain attacks:** malicious and hijacked packages and GitHub Actions from OSV (OpenSSF Malicious Packages, which includes GitHub's malware advisories).
+- **Supply chain attacks:** malicious and hijacked packages and GitHub Actions, read directly from GitHub's malware advisories (minutes old) and from OSV (OpenSSF Malicious Packages).
 
 It serves a web feed, RSS/Atom/JSON Feed, a JSON API, `llms.txt`, and a remote MCP server with a `check_dependencies` tool.
 
@@ -20,6 +20,8 @@ Stack: TypeScript, Hono on Cloudflare Workers, D1, a Cron Trigger every 10 minut
 | `POST /api/v1/check` | JSON `{packages, manifest, format, actions}`, or a raw lockfile body with `?filename=` |
 | `/mcp` | MCP over Streamable HTTP, no auth: `list_feed`, `get_threat`, `check_dependencies` |
 | `/llms.txt` | Agent-facing index |
+| `/about` | What counts as active, privacy, sources, contact |
+| `/health` | 200 when the cron ran in the last 30 minutes, else 503 (for uptime monitors) |
 
 ```bash
 curl -s -X POST "http://localhost:8787/api/v1/check?filename=package-lock.json" --data-binary @package-lock.json
@@ -102,17 +104,42 @@ npx wrangler whoami                      # confirm it is the right account
 npx wrangler d1 create threat-feed       # copy database_id into wrangler.jsonc (first time only)
 npx wrangler d1 migrations apply DB --remote
 npx wrangler secret put ANTHROPIC_API_KEY   # optional, enables AI summaries
+npx wrangler secret put GITHUB_TOKEN        # optional, avoids GitHub's 60/hour unauthenticated limit
 npx wrangler deploy
 ```
 
 `SITE_URL` in `wrangler.jsonc` is the public URL used in feed and API links; `.dev.vars` overrides it to localhost for local dev.
 
-## Known limits (phase 1)
+## CI: fail a build on active threats
+
+```yaml
+# .github/workflows/compromised.yml
+name: Active threat check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # pin to a full commit SHA
+      - name: Check dependencies against active threats
+        run: |
+          curl -sf --data-binary @package-lock.json \
+            "https://compromised.live/api/v1/check?filename=package-lock.json" > result.json
+          jq '.matches[] | "\(.name)@\(.version): \(.title) (\(.threat_id))"' result.json
+          jq -e '.matches | length == 0' result.json > /dev/null
+```
+
+`/api/v1/check` and `/mcp` are rate-limited per IP (20 and 60 requests a minute).
+
+## Reporting problems
+
+False positives, missing threats and wrong summaries: [open an issue](../../issues/new?template=report.yml). Every threat page and check result links to the same form with the id filled in.
+
+## Known limits
 
 - Action refs pinned to a commit SHA or a moving tag (`@v4`) are returned as `unresolved`, not checked.
 - Unpinned `requirements.txt` lines are returned as `unresolved`.
 - Maven, NuGet, RubyGems and Packagist matches list fixed versions without picking the nearest one.
-- GitHub's malware advisories arrive through OSV, about an hour after GitHub publishes them.
 - Container images are not supported.
 
 ## Data and licenses

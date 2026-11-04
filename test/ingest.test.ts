@@ -1,6 +1,7 @@
 import { createExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ghsaRecord, parseGhsaRange } from '../src/adapters/ghsa';
 import { kevRecords } from '../src/adapters/kev';
 import { isCompromised, malRecord } from '../src/adapters/osv_mal';
 import { getThreat, listThreats, parseFilters } from '../src/db';
@@ -264,5 +265,45 @@ describe('www redirect', () => {
     const res = await app.fetch(new Request('https://www.compromised.live/check?x=1'), env, createExecutionContext());
     expect(res.status).toBe(301);
     expect(res.headers.get('location')).toBe('https://compromised.live/check?x=1');
+  });
+});
+
+describe('ghsa adapter', () => {
+  it('parses GitHub version ranges into OSV-style ranges', () => {
+    expect(parseGhsaRange('>= 0', null)).toEqual({ ranges: [{ type: 'ECOSYSTEM', events: [{ introduced: '0' }] }], versions: [] });
+    expect(parseGhsaRange('= 4.1.1', null)).toEqual({ ranges: [], versions: ['4.1.1'] });
+    expect(parseGhsaRange('>= 1.0, < 1.2.3', null).ranges[0].events).toEqual([{ introduced: '1.0' }, { fixed: '1.2.3' }]);
+    expect(parseGhsaRange('<= 2.0', null).ranges[0].events).toEqual([{ introduced: '0' }, { last_affected: '2.0' }]);
+    expect(parseGhsaRange('< 46.0.1', '46.0.1').ranges[0].events).toEqual([{ introduced: '0' }, { fixed: '46.0.1' }]);
+  });
+  it('maps a malware advisory and its ecosystem names', () => {
+    const rec = ghsaRecord({
+      ghsa_id: 'GHSA-aaaa-bbbb-cccc', cve_id: null, html_url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
+      summary: 'Malware in evilpkg', description: 'Steals tokens', published_at: '2026-11-04T00:00:00Z', updated_at: '2026-11-04T00:00:00Z', withdrawn_at: null,
+      vulnerabilities: [{ package: { ecosystem: 'pip', name: 'evilpkg' }, vulnerable_version_range: '>= 0', first_patched_version: null }, { package: { ecosystem: 'other', name: 'x' }, vulnerable_version_range: null, first_patched_version: null }],
+    });
+    expect(rec).toMatchObject({ source: 'ghsa', aliases: ['GHSA-aaaa-bbbb-cccc'], kind: 'malicious_package', title: 'Malware in evilpkg' });
+    expect(rec.affected).toEqual([{ ecosystem: 'PyPI', package: 'evilpkg', ranges: [{ type: 'ECOSYSTEM', events: [{ introduced: '0' }] }], versions: [] }]);
+  });
+});
+
+describe('about, health, rate limits and report links', () => {
+  const get = (path: string, env: Env = E) => app.fetch(new Request(`http://x${path}`), env, createExecutionContext());
+  it('serves the about page with the privacy notes', async () => {
+    const page = await (await get('/about')).text();
+    expect(page).toContain('never stored or logged');
+    expect(page).toContain('/issues/new?template=report.yml');
+  });
+  it('reports health from the cursor timestamps', async () => {
+    await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('osv_mal', '{}', ?) ON CONFLICT (source) DO UPDATE SET updated_at = excluded.updated_at")
+      .bind(new Date().toISOString()).run();
+    const res = await get('/health');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+  it('returns 429 when the rate limiter says no', async () => {
+    const env = { ...E, CHECK_LIMIT: { limit: async () => ({ success: false }) } as unknown as RateLimit };
+    const res = await app.fetch(new Request('http://x/api/v1/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }), env, createExecutionContext());
+    expect(res.status).toBe(429);
   });
 });

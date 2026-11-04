@@ -1,11 +1,12 @@
 import { epss } from './adapters/epss';
+import { ghsa } from './adapters/ghsa';
 import { kev } from './adapters/kev';
 import { osvMal } from './adapters/osv_mal';
 import { linkCve } from './osv';
 import { templateSummary } from './summarize';
 import type { Adapter, Affected, Env, Kind, Severity, SourceRecord } from './types';
 
-export const ADAPTERS: Adapter[] = [kev, epss, osvMal];
+export const ADAPTERS: Adapter[] = [kev, epss, ghsa, osvMal];
 export const KEV_HOT_DAYS = 14;
 
 const KIND_RANK: Kind[] = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'];
