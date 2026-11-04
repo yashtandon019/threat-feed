@@ -215,3 +215,22 @@ describe('older KEV entries in check_dependencies', () => {
     });
   });
 });
+
+describe('GitHub Actions matching', () => {
+  it('matches action versions locally because OSV does not range-match Actions', async () => {
+    await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('kev', ?, '') ON CONFLICT (source) DO UPDATE SET cursor = excluded.cursor")
+      .bind(JSON.stringify({ version: 'x', cves: ['CVE-2025-30066'] }))
+      .run();
+    stubOsv({ [tjGhsa.id]: tjGhsa }, (q) => (q.package.name === 'tj-actions/changed-files' ? [tjGhsa.id] : []));
+    const res = await app.fetch(
+      new Request('http://x/api/v1/check', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actions: ['uses: tj-actions/changed-files@v45.0.7', 'uses: tj-actions/changed-files@v46.0.1'] }),
+      }),
+      E,
+    );
+    const body = (await res.json()) as { matches: { version: string; fix: object }[] };
+    expect(body.matches.map((m) => [m.version, m.fix])).toEqual([['45.0.7', { action: 'upgrade', nearest_safe: '46.0.1' }]]);
+  });
+});

@@ -17,6 +17,24 @@ export function compareVersions(ecosystem: string, a: string, b: string): number
   return null;
 }
 
+/**
+ * Walks OSV range events (sorted ascending) the way the OSV spec defines them.
+ * Needed for GitHub Actions, where OSV's own querybatch does no range matching.
+ */
+export function isAffected(ecosystem: string, version: string, ranges: OsvRange[], versions: string[]): boolean {
+  if (versions.includes(version)) return true;
+  const cmp = (a: string, b: string) => compareVersions(ecosystem, a, b);
+  return ranges.some((r) => {
+    let affected = false;
+    for (const e of r.events) {
+      if (e.introduced !== undefined && (e.introduced === '0' || (cmp(version, e.introduced) ?? -1) >= 0)) affected = true;
+      if (e.fixed !== undefined && (cmp(version, e.fixed) ?? -1) >= 0) affected = false;
+      if (e.last_affected !== undefined && (cmp(version, e.last_affected) ?? -1) > 0) affected = false;
+    }
+    return affected;
+  });
+}
+
 /** The lowest fixed version above `version` across all ranges, or undefined if none or no comparator. */
 export function nearestSafe(ecosystem: string, version: string, ranges: OsvRange[]): string | undefined {
   const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));

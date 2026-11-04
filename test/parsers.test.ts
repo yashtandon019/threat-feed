@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { detectFormat, parseActions, parseManifest, parsePnpmKey } from '../src/parsers';
 import type { OsvRange } from '../src/types';
-import { nearestSafe } from '../src/versions';
+import { isAffected, nearestSafe } from '../src/versions';
 
 const PACKAGE_LOCK = JSON.stringify({
   lockfileVersion: 3,
@@ -97,5 +97,13 @@ describe('nearestSafe', () => {
   });
   it('returns undefined without a comparator', () => {
     expect(nearestSafe('Maven', '1.0', [{ type: 'ECOSYSTEM', events: [{ fixed: '2.0' }] }])).toBeUndefined();
+  });
+});
+
+describe('isAffected', () => {
+  const r: OsvRange[] = [{ type: 'ECOSYSTEM', events: [{ introduced: '0' }, { fixed: '1.5.0' }, { introduced: '2.0.0' }, { last_affected: '2.1.0' }] }];
+  it('walks introduced/fixed/last_affected events', () => {
+    expect(['1.0.0', '1.5.0', '1.9.0', '2.0.0', '2.1.0', '2.1.1'].map((v) => isAffected('GitHub Actions', v, r, []))).toEqual([true, false, false, true, true, false]);
+    expect(isAffected('GitHub Actions', '9.9.9', [], ['9.9.9'])).toBe(true);
   });
 });

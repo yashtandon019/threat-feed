@@ -25,7 +25,8 @@ export async function getVuln(id: string): Promise<OsvVuln | null> {
 
 export interface OsvQuery {
   package: { ecosystem: string; name: string };
-  version: string;
+  /** Omit to get every advisory for the package. */
+  version?: string;
 }
 
 /** Returns OSV vuln ids per query, in input order. */

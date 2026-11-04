@@ -3,7 +3,7 @@ import { isCompromised } from './adapters/osv_mal';
 import { affectedOf, getVuln, queryBatch, type OsvVuln } from './osv';
 import { detectFormat, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
 import { normalizeEcosystem, type Env } from './types';
-import { nearestSafe } from './versions';
+import { isAffected, nearestSafe } from './versions';
 
 export const MAX_MANIFEST_BYTES = 2_000_000;
 export const MAX_PACKAGES = 5000;
@@ -73,7 +73,13 @@ function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[]
  */
 export async function checkDependencies(env: Env, input: CheckInput) {
   const { packages, unresolved } = collect(input);
-  const hits = await queryBatch(packages.map((p) => ({ package: { ecosystem: p.ecosystem, name: p.name }, version: p.version })));
+  // OSV does no range matching for GitHub Actions, so ask for every advisory and filter with isAffected below.
+  const hits = await queryBatch(
+    packages.map((p) => ({
+      package: { ecosystem: p.ecosystem, name: p.name },
+      version: p.ecosystem === 'GitHub Actions' ? undefined : p.version,
+    })),
+  );
   const allIds = [...new Set(hits.flat())];
 
   const active = new Map<string, { id: string; kind: string; tier: number; title: string; summary: string }>();
@@ -113,6 +119,7 @@ export async function checkDependencies(env: Env, input: CheckInput) {
       const id = t?.id ?? (isMal ? vulnId : kevCve!);
       if (seen.has(id)) continue;
       const aff = affectedOf(v).find((a) => a.ecosystem === pkg.ecosystem && a.package === pkg.name);
+      if (pkg.ecosystem === 'GitHub Actions' && !(aff && isAffected(pkg.ecosystem, pkg.version, aff.ranges, aff.versions))) continue;
       const ranges = aff?.ranges ?? [];
       const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));
       let fix: Fix;
