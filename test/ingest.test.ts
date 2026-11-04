@@ -234,3 +234,26 @@ describe('GitHub Actions matching', () => {
     expect(body.matches.map((m) => [m.version, m.fix])).toEqual([['45.0.7', { action: 'upgrade', nearest_safe: '46.0.1' }]]);
   });
 });
+
+describe('web pages', () => {
+  it('renders the check page, rejects an empty form, and shows matches for a pasted lockfile', async () => {
+    const ctx = () => createExecutionContext();
+    expect(await (await app.fetch(new Request('http://x/check'), E, ctx())).text()).toContain('Is anything in your lockfile under attack?');
+    const empty = new FormData();
+    empty.set('manifest', '  ');
+    expect((await app.fetch(new Request('http://x/check', { method: 'POST', body: empty }), E, ctx())).status).toBe(400);
+    stubOsv({ 'MAL-OLD': { ...typosquat, id: 'MAL-OLD' } }, (q) => (q.package.name === 'old-bad' ? ['MAL-OLD'] : []));
+    const form = new FormData();
+    form.set('manifest', JSON.stringify({ lockfileVersion: 3, packages: { 'node_modules/old-bad': { version: '1.0.0' }, 'node_modules/<script>': { version: '1.0.0' } } }));
+    const page = await (await app.fetch(new Request('http://x/check', { method: 'POST', body: form }), E, ctx())).text();
+    expect(page).toContain('old-bad@1.0.0');
+    expect(page).toContain('None. Remove it.');
+    expect(page).not.toContain('<script>@'); // package names are escaped
+  });
+
+  it('accepts repeated filter params from the form', async () => {
+    const page = await (await app.fetch(new Request('http://x/?ecosystem=npm&ecosystem=PyPI&tier=3&since=30d'), E, createExecutionContext())).text();
+    expect(page).toMatch(/value="npm" checked/);
+    expect(page).toMatch(/value="PyPI" checked/);
+  });
+});

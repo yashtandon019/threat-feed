@@ -1,11 +1,11 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { cache } from 'hono/cache';
 import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
-import { bulkMalwareCounts, getThreat, listThreats, parseFilters } from './db';
+import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
-import { feedPage, threatPage } from './html';
+import { checkPage, feedPage, threatPage } from './html';
 import { runIngest } from './ingest';
 import { mcpFetch } from './mcp';
 import type { Format } from './parsers';
@@ -44,21 +44,47 @@ app.post('/api/v1/check', async (c) => {
   }
 });
 
+const site = (env: Env) => ({ name: env.SITE_NAME, url: env.SITE_URL });
+
+// Accepts both ?ecosystem=npm,PyPI and repeated ?ecosystem=npm&ecosystem=PyPI (what HTML forms send).
+function filtersFrom(c: Context<{ Bindings: Env }>) {
+  const multi = (k: string) => (c.req.queries(k) ?? []).flatMap((v) => v.split(',')).filter(Boolean);
+  return parseFilters({ ecosystem: multi('ecosystem'), kind: multi('kind'), tier: c.req.query('tier'), since: c.req.query('since'), limit: c.req.query('limit') });
+}
+
+app.post('/check', async (c) => {
+  const body = await c.req.parseBody();
+  const file = body.file instanceof File && body.file.size ? body.file : undefined;
+  const manifest = file ? await file.text() : String(body.manifest ?? '');
+  const format = String(body.format ?? '');
+  const view = { manifest: file ? '' : manifest, format };
+  if (!manifest.trim()) return c.html(checkPage({ ...view, error: 'Paste a lockfile or choose a file first.' }, site(c.env)), 400);
+  try {
+    const result = await checkDependencies(c.env, { manifest, format: (format || undefined) as Format | undefined, filename: file?.name });
+    return c.html(checkPage({ ...view, result }, site(c.env)));
+  } catch (err) {
+    if (err instanceof CheckError) return c.html(checkPage({ ...view, error: err.message }, site(c.env)), 400);
+    throw err;
+  }
+});
+
 app.get('*', cache({ cacheName: 'threat-feed', cacheControl: 'public, max-age=60' }));
 
 app.get('/', async (c) => {
-  const q = c.req.query();
-  const f = parseFilters(q);
-  const [items, bulk] = await Promise.all([listThreats(c.env, f), bulkMalwareCounts(c.env, f.since)]);
-  return c.html(feedPage(items, q, bulk, f));
+  const f = filtersFrom(c);
+  const since = ['24h', '7d', '30d'].includes(c.req.query('since') ?? '') ? c.req.query('since')! : '7d';
+  const [items, bulk, status] = await Promise.all([listThreats(c.env, f), bulkMalwareCounts(c.env, f.since), sourceStatus(c.env)]);
+  return c.html(feedPage(items, { ecosystem: f.ecosystems, kind: f.kinds, since }, bulk, f, status, site(c.env)));
 });
+
+app.get('/check', (c) => c.html(checkPage({ manifest: '', format: '' }, site(c.env))));
 
 app.get('/t/:id', async (c) => {
   const t = await getThreat(c.env, c.req.param('id'));
-  return t ? c.html(threatPage(t)) : c.notFound();
+  return t ? c.html(threatPage(t, site(c.env))) : c.notFound();
 });
 
-app.get('/api/v1/threats', async (c) => c.json({ generated_at: new Date().toISOString(), items: await listThreats(c.env, parseFilters(c.req.query())) }));
+app.get('/api/v1/threats', async (c) => c.json({ generated_at: new Date().toISOString(), items: await listThreats(c.env, filtersFrom(c)) }));
 
 app.get('/api/v1/threats/:id', async (c) => {
   const t = await getThreat(c.env, c.req.param('id'));
@@ -66,15 +92,15 @@ app.get('/api/v1/threats/:id', async (c) => {
 });
 
 app.get('/feed.xml', async (c) => {
-  const items = await listThreats(c.env, parseFilters(c.req.query()));
+  const items = await listThreats(c.env, filtersFrom(c));
   return c.body(rss(items, c.req.url, c.env.SITE_URL), 200, { 'content-type': 'application/rss+xml; charset=utf-8' });
 });
 app.get('/feed.atom', async (c) => {
-  const items = await listThreats(c.env, parseFilters(c.req.query()));
+  const items = await listThreats(c.env, filtersFrom(c));
   return c.body(atom(items, c.req.url, c.env.SITE_URL), 200, { 'content-type': 'application/atom+xml; charset=utf-8' });
 });
 app.get('/feed.json', async (c) => {
-  const items = await listThreats(c.env, parseFilters(c.req.query()));
+  const items = await listThreats(c.env, filtersFrom(c));
   return c.json(jsonFeed(items, c.req.url, c.env.SITE_URL), 200, { 'content-type': 'application/feed+json; charset=utf-8' });
 });
 

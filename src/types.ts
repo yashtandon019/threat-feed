@@ -4,6 +4,7 @@ export interface Env {
   INGEST_TOKEN?: string;
   SUMMARY_MODEL: string;
   SITE_URL: string;
+  SITE_NAME: string;
 }
 
 export const KINDS = ['exploited_vuln', 'malicious_package', 'compromised_package', 'poisoned_action'] as const;

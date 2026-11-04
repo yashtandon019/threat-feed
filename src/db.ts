@@ -155,6 +155,26 @@ export async function getThreat(env: Env, idOrAlias: string) {
   };
 }
 
+export interface SourceStatus {
+  lastRun: string | null;
+  kevVersion: string | null;
+  epssDate: string | null;
+  osvAt: string | null;
+}
+
+/** Freshness for the status strip, read from the adapter cursors. */
+export async function sourceStatus(env: Env): Promise<SourceStatus> {
+  const rows = (await env.DB.prepare('SELECT source, cursor, updated_at FROM cursors').all<{ source: string; cursor: string; updated_at: string }>()).results;
+  const by = Object.fromEntries(rows.map((r) => [r.source, r]));
+  const json = (s: string | undefined) => (s ? (JSON.parse(s) as Record<string, unknown>) : {});
+  return {
+    lastRun: rows.map((r) => r.updated_at).sort().at(-1) ?? null,
+    kevVersion: (json(by.kev?.cursor).version as string) ?? null,
+    epssDate: (json(by.epss?.cursor).date as string) ?? null,
+    osvAt: by.osv_mal?.updated_at ?? null,
+  };
+}
+
 /** Tier 3 (throwaway malicious packages) is shown as a count per ecosystem instead of one item each. */
 export async function bulkMalwareCounts(env: Env, since: string) {
   return (

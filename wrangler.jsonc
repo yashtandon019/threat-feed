@@ -15,7 +15,8 @@
   ],
   "vars": {
     "SUMMARY_MODEL": "claude-haiku-5-5",
-    "SITE_URL": "https://threat-feed.yashtandon019.workers.dev"
+    "SITE_URL": "https://threat-feed.yashtandon019.workers.dev",
+    "SITE_NAME": "threat-feed"
   },
   "observability": { "enabled": true }
 }
