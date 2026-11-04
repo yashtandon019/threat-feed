@@ -20,6 +20,7 @@ export interface Merged {
   details: string;
   severity: Severity;
   affected: Affected[];
+  refs: string[];
   epss?: number;
   kev?: SourceRecord['kev'];
   withdrawn: boolean;
@@ -59,6 +60,7 @@ export function merge(records: SourceRecord[]): Merged {
     details: [...new Set(records.map((r) => r.details).filter(Boolean))].join('\n\n'),
     severity: records.map((r) => r.severity).reduce((a, b) => (SEV_RANK.indexOf(b) > SEV_RANK.indexOf(a) ? b : a)),
     affected: [...byPkg.values()],
+    refs: [...new Set(records.flatMap((r) => r.refs ?? []))],
     epss: records.map((r) => r.epss).find((e) => e !== undefined),
     kev: kevRec?.kev,
     withdrawn: records.every((r) => r.withdrawn),
@@ -148,19 +150,19 @@ export async function upsert(env: Env, rec: SourceRecord, now: Date): Promise<st
     db
       .prepare(
         `INSERT INTO threats (id, kind, tier, title, severity, details, summary, summary_model, summary_hash, content_hash,
-           epss, kev_added, kev_due, ransomware, status, first_seen, updated_at, last_signal_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'template', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           epss, kev_added, kev_due, ransomware, status, first_seen, updated_at, last_signal_at, refs_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'template', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, tier = excluded.tier, title = excluded.title,
            severity = excluded.severity, details = excluded.details, content_hash = excluded.content_hash,
            epss = excluded.epss, kev_added = excluded.kev_added, kev_due = excluded.kev_due,
            ransomware = excluded.ransomware, status = excluded.status, updated_at = excluded.updated_at,
-           last_signal_at = excluded.last_signal_at,
+           last_signal_at = excluded.last_signal_at, refs_json = excluded.refs_json,
            summary = CASE WHEN threats.summary_model = 'template' THEN excluded.summary ELSE threats.summary END`,
       )
       .bind(
         id, m.kind, tier, m.title, m.severity, m.details, templateSummary(m), contentHash,
         m.epss ?? null, m.kev?.dateAdded ?? null, m.kev?.dueDate ?? null, m.kev?.ransomware ? 1 : 0,
-        m.withdrawn ? 'withdrawn' : 'active', firstSeen, ts, ts,
+        m.withdrawn ? 'withdrawn' : 'active', firstSeen, ts, ts, JSON.stringify(m.refs),
       ),
     db.prepare('DELETE FROM affected WHERE threat_id = ?').bind(id),
     ...m.affected.map((a) =>

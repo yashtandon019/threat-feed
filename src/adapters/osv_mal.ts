@@ -64,6 +64,7 @@ export function malRecord(v: OsvVuln): SourceRecord {
     severity: severityOf(v) === 'unknown' ? 'critical' : severityOf(v),
     affected,
     url: `https://osv.dev/vulnerability/${v.id}`,
+    refs: (v.references ?? []).filter((r) => r.type !== 'ADVISORY').map((r) => r.url),
     published: v.published ?? v.modified,
     withdrawn: !!v.withdrawn,
   };

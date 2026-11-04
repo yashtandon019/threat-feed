@@ -85,6 +85,7 @@ h2.sec{margin:0;font:700 20px var(--display);font-stretch:85%}
 .card h3{margin:0;font:700 21px/1.2 var(--display);font-stretch:88%}
 .card h3 a{color:var(--ink);text-decoration:none}.card h3 a:hover{text-decoration:underline}
 .card p{margin:0;max-width:72ch;color:var(--ink-2)}
+.pkgs{margin:0;padding-left:18px;max-height:220px;overflow:auto;color:var(--ink-2);font-size:14px}
 .flags{display:flex;flex-wrap:wrap;gap:6px;padding-top:2px}
 .flag{font-size:12px;padding:3px 8px;border-radius:4px;background:var(--soft);color:var(--ink-2)}
 .flag.hot{background:var(--act-tint);color:var(--act-label)}
@@ -277,7 +278,11 @@ ${items.length
       (t) => html`<article class="card"><div class="bar t${t.tier}">${TIER_LABEL[t.tier]}</div><div class="card-body">
 <div class="meta"><span class="kind">${KIND_LABEL[t.kind]}</span><span class="mono">${t.id}</span><span>${target(t)}</span></div>
 <h3><a href="/t/${encodeURIComponent(t.id)}">${shortTitle(t.title)}</a></h3>
-<p>${t.summary}</p>
+${t.campaign
+  ? html`<ul class="pkgs">${[...new Map(t.campaign.members.flatMap((m) => m.affected.map((a) => [`${a.ecosystem}/${a.package}/${a.affected}`, { id: m.id, a }] as const))).values()].map(
+      ({ id, a }) => html`<li><a class="mono" href="/t/${encodeURIComponent(id)}">${a.ecosystem} / ${a.package}</a> <span class="mono">${a.affected}</span></li>`,
+    )}</ul>`
+  : html`<p>${t.summary}</p>`}
 ${flags(t).length ? html`<div class="flags">${flags(t).map((x) => html`<span class="flag ${x.hot ? 'hot' : ''}">${x.text}</span>`)}</div>` : ''}
 <div class="foot"><span>Sources: <a href="/t/${encodeURIComponent(t.id)}#sources">${sourcesOf(t)}</a>${t.summary_source === 'ai' ? ' · AI summary' : ''}</span>
 <span class="mono">first seen ${day(t.first_seen)} · updated ${day(t.updated_at)}</span></div>

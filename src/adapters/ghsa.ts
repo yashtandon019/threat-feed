@@ -27,6 +27,7 @@ interface GhsaAdvisory {
   published_at: string;
   updated_at: string;
   withdrawn_at: string | null;
+  references?: string[];
   vulnerabilities: { package: { ecosystem: string; name: string } | null; vulnerable_version_range: string | null; first_patched_version: string | null }[];
 }
 
@@ -70,6 +71,7 @@ export function ghsaRecord(a: GhsaAdvisory): SourceRecord {
     severity: 'critical',
     affected,
     url: a.html_url,
+    refs: (a.references ?? []).filter((u) => !/^https:\/\/(github\.com\/advisories|nvd\.nist\.gov)\//.test(u)),
     published: a.published_at,
     withdrawn: !!a.withdrawn_at,
   };

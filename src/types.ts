@@ -39,6 +39,8 @@ export interface SourceRecord {
   severity: Severity;
   affected: Affected[];
   url: string;
+  /** Third-party write-ups (not the advisory itself); shared refs group a campaign on the feed. */
+  refs?: string[];
   published: string;
   withdrawn?: boolean;
   kev?: { dateAdded: string; dueDate: string; ransomware: boolean; requiredAction: string };

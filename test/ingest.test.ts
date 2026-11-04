@@ -127,7 +127,7 @@ describe('ingest and dedupe', () => {
 
 describe('outputs', () => {
   it('escapes attacker-controlled text in RSS', () => {
-    const xml = rss([{ id: 'X', url: 'u', kind: 'malicious_package', tier: 1, severity: 'critical', title: '<script>', summary: 'a & b', summary_source: 'template', affected: [], epss: null, kev: null, first_seen: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }], 's', 's');
+    const xml = rss([{ id: 'X', url: 'u', kind: 'malicious_package', tier: 1, severity: 'critical', title: '<script>', summary: 'a & b', summary_source: 'template', affected: [], epss: null, kev: null, first_seen: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', campaign: null }], 's', 's');
     expect(xml).toContain('&lt;script&gt;');
     expect(xml).toContain('a &amp; b');
     expect(xml).not.toContain('<script>');
@@ -395,5 +395,53 @@ describe('review regressions', () => {
     const second = await epss.run(E, first.cursor, NOW);
     const third = await epss.run(E, second.cursor, NOW);
     expect([first.records.length, second.records.length, third.records.length]).toEqual([200, 50, 0]);
+  });
+});
+
+describe('campaign grouping', () => {
+  const wave = (n: number, ref: string, hours = 0): OsvVuln => ({
+    id: `MAL-W-${n}`,
+    summary: `Malicious code in pkg-${n} (npm)`,
+    aliases: [`GHSA-w-${n}`],
+    modified: '2026-11-03T10:00:00Z',
+    references: [{ type: 'ADVISORY', url: `https://github.com/advisories/GHSA-w-${n}` }, { type: 'WEB', url: ref }],
+    affected: [{ package: { ecosystem: 'npm', name: `pkg-${n}` }, ranges: [{ type: 'SEMVER', events: [{ introduced: '2.0.1' }, { last_affected: '2.0.2' }] }] }],
+  });
+
+  it('shows one wave as one card but keeps each package matchable and each id resolvable', async () => {
+    const ref = 'https://example.com/blog/worm-wave';
+    for (let i = 1; i <= 3; i++) await upsert(E, malRecord(wave(i, ref)), new Date(NOW.getTime() + i * 60e3));
+    await upsert(E, malRecord(wave(9, ref)), new Date(NOW.getTime() + 5 * 864e5));
+    await upsert(E, malRecord(wave(4, 'https://example.com/other')), NOW);
+    const items = await listThreats(E, parseFilters({ tier: 1, since: '30d' }, new Date(NOW.getTime() + 6 * 864e5)));
+    const grouped = items.filter((t) => t.campaign);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].campaign!.members.map((m) => m.id).sort()).toEqual(['MAL-W-1', 'MAL-W-2', 'MAL-W-3']);
+    expect(grouped[0].affected.map((a) => a.package).sort()).toEqual(['pkg-1', 'pkg-2', 'pkg-3']);
+    expect(grouped[0].title).toBe('3 hijacked packages in one campaign');
+    expect(items.map((t) => t.id)).toEqual(expect.arrayContaining(['MAL-W-4', 'MAL-W-9']));
+    expect((await getThreat(E, 'GHSA-w-2'))?.id).toBe('MAL-W-2');
+
+    stubOsv({}, () => []);
+    const res = await app.fetch(new Request('http://x/api/v1/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ packages: [{ ecosystem: 'npm', name: 'pkg-2', version: '2.0.1' }] }) }), E, createExecutionContext());
+    expect(JSON.stringify(await res.json())).toContain('MAL-W-2');
+  });
+
+  it('keeps the own title when one package is listed under two unlinked advisories', async () => {
+    const ref = 'https://example.com/one-pkg';
+    await upsert(E, malRecord(wave(5, ref)), NOW);
+    await upsert(E, { ...malRecord(wave(5, ref)), source: 'ghsa', sourceId: 'GHSA-solo', aliases: ['GHSA-solo'] }, NOW);
+    const g = (await listThreats(E, parseFilters({ tier: 1, since: '30d' }, NOW))).find((t) => t.campaign?.members.some((m) => m.id === 'GHSA-solo'));
+    expect(g?.title).toBe('Malicious code in pkg-5 (npm)');
+  });
+
+  it('never groups KEV CVEs', async () => {
+    const ref = 'https://example.com/shared';
+    const kevRec = (id: string) => ({ ...malRecord(wave(0, ref)), source: 'kev', sourceId: id, aliases: [id], kind: 'exploited_vuln' as const, affected: [], refs: [ref] });
+    stubOsv({});
+    await upsert(E, kevRec('CVE-2026-0001'), NOW);
+    await upsert(E, kevRec('CVE-2026-0002'), NOW);
+    const items = await listThreats(E, parseFilters({ tier: 3, since: '30d' }, NOW));
+    expect(items.filter((t) => t.id.startsWith('CVE-2026-000')).every((t) => !t.campaign)).toBe(true);
   });
 });

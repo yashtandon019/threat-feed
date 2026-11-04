@@ -50,6 +50,7 @@ export interface ThreatRow {
   first_seen: string;
   updated_at: string;
   last_signal_at: string;
+  refs_json?: string;
 }
 
 export interface AffectedOut {
@@ -105,17 +106,24 @@ function toOut(t: ThreatRow, affected: AffectedOut[], siteUrl: string) {
     kev: t.kev_added ? { date_added: t.kev_added, due_date: t.kev_due, ransomware: !!t.ransomware } : null,
     first_seen: t.first_seen,
     updated_at: t.updated_at,
+    /** Set when this item stands for several threats from one campaign; each id still resolves on its own. */
+    campaign: null as null | { members: { id: string; url: string; affected: AffectedOut[] }[] },
   };
 }
 
 async function affectedFor(env: Env, ids: string[]) {
   const map = new Map<string, AffectedOut[]>();
-  if (!ids.length) return map;
-  const rows = (
-    await env.DB.prepare(`SELECT * FROM affected WHERE threat_id IN (${ids.map(() => '?').join(',')})`)
-      .bind(...ids)
-      .all<{ threat_id: string; ecosystem: string; package: string; ranges_json: string; versions_json: string }>()
-  ).results;
+  const rows = [];
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90); // D1 allows 100 bound parameters per statement
+    rows.push(
+      ...(
+        await env.DB.prepare(`SELECT * FROM affected WHERE threat_id IN (${chunk.map(() => '?').join(',')})`)
+          .bind(...chunk)
+          .all<{ threat_id: string; ecosystem: string; package: string; ranges_json: string; versions_json: string }>()
+      ).results,
+    );
+  }
   for (const r of rows) map.set(r.threat_id, [...(map.get(r.threat_id) ?? []), toAffectedOut(r)]);
   return map;
 }
@@ -132,13 +140,58 @@ export async function listThreats(env: Env, f: Filters): Promise<ThreatOut[]> {
     where.push(`EXISTS (SELECT 1 FROM affected a WHERE a.threat_id = t.id AND a.ecosystem IN (${f.ecosystems.map(() => '?').join(',')}))`);
     binds.push(...f.ecosystems);
   }
+  // ponytail: over-fetch so a wave collapses instead of eating the limit; a wave larger than this splits.
   const rows = (
     await env.DB.prepare(`SELECT t.* FROM threats t WHERE ${where.join(' AND ')} ORDER BY t.last_signal_at DESC LIMIT ?`)
-      .bind(...binds, f.limit)
+      .bind(...binds, f.limit * 5)
       .all<ThreatRow>()
   ).results;
   const aff = await affectedFor(env, rows.map((r) => r.id));
-  return rows.map((r) => toOut(r, aff.get(r.id) ?? [], env.SITE_URL));
+  return groupCampaigns(rows.map((r) => ({ out: toOut(r, aff.get(r.id) ?? [], env.SITE_URL), refs: JSON.parse(r.refs_json ?? '[]') as string[] }))).slice(0, f.limit);
+}
+
+const CAMPAIGN_KINDS: Kind[] = ['compromised_package', 'malicious_package'];
+export const CAMPAIGN_WINDOW_HOURS = 72;
+
+/** Package malware that shares a third-party write-up and was first seen within the window becomes one item. Display only. */
+export function groupCampaigns(items: { out: ThreatOut; refs: string[] }[]): ThreatOut[] {
+  const parent = items.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const byRef = new Map<string, number[]>();
+  items.forEach((it, i) => {
+    if (CAMPAIGN_KINDS.includes(it.out.kind)) for (const r of new Set(it.refs)) byRef.set(r, [...(byRef.get(r) ?? []), i]);
+  });
+  const near = (a: number, b: number) =>
+    Math.abs(Date.parse(items[a].out.first_seen) - Date.parse(items[b].out.first_seen)) <= CAMPAIGN_WINDOW_HOURS * 3600e3;
+  for (const idx of byRef.values()) {
+    idx.sort((a, b) => items[a].out.first_seen.localeCompare(items[b].out.first_seen));
+    for (let k = 1; k < idx.length; k++) if (near(idx[k - 1], idx[k])) parent[find(idx[k])] = find(idx[k - 1]);
+  }
+
+  const groups = new Map<number, ThreatOut[]>();
+  items.forEach((it, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), it.out]));
+  const out: ThreatOut[] = [];
+  items.forEach((it, i) => {
+    const g = groups.get(find(i))!;
+    if (g[0] !== it.out) return;
+    if (g.length === 1) return out.push(it.out);
+    const lead = g.reduce((a, b) => (b.tier < a.tier ? b : a));
+    const pkgs = (ts: ThreatOut[]) => new Set(ts.flatMap((t) => t.affected.map((a) => `${a.ecosystem}/${a.package}`))).size;
+    const n = pkgs(g);
+    const hijacks = pkgs(g.filter((t) => t.kind === 'compromised_package'));
+    out.push({
+      ...lead,
+      // n = 1: one package listed under two not-yet-linked advisories, so keep its own title.
+      title: n === 1 ? lead.title : hijacks
+        ? `${hijacks} hijacked package${hijacks === 1 ? '' : 's'} in one campaign` + (n > hijacks ? ` (+${n - hijacks} malicious)` : '')
+        : `${n} malicious package${n === 1 ? '' : 's'} in one campaign`,
+      affected: g.flatMap((t) => t.affected),
+      first_seen: g.map((t) => t.first_seen).sort()[0],
+      updated_at: g.map((t) => t.updated_at).sort().at(-1)!,
+      campaign: { members: g.map((t) => ({ id: t.id, url: t.url, affected: t.affected })) },
+    });
+  });
+  return out;
 }
 
 /** Accepts any alias (CVE, GHSA, MAL, OSV id). */

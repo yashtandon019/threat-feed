@@ -1,0 +1,1 @@
+ALTER TABLE threats ADD COLUMN refs_json TEXT NOT NULL DEFAULT '[]';
