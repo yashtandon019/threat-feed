@@ -5,7 +5,10 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": { "crons": ["*/10 * * * *"] },
-  "routes": [{ "pattern": "compromised.live", "custom_domain": true }],
+  "routes": [
+    { "pattern": "compromised.live", "custom_domain": true },
+    { "pattern": "www.compromised.live", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

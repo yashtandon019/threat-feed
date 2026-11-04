@@ -14,6 +14,16 @@ import type { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
 
+// www.<site> redirects to the canonical SITE_URL host.
+app.use(async (c, next) => {
+  const url = new URL(c.req.url);
+  const canonical = new URL(c.env.SITE_URL);
+  if (url.hostname === `www.${canonical.hostname}`) {
+    return c.redirect(`${canonical.origin}${url.pathname}${url.search}`, 301);
+  }
+  await next();
+});
+
 app.all('/mcp', (c) => mcpFetch(c.env, c.req.raw));
 
 // Manual run of the cron job. Awaited in the request: waitUntil work is cut off ~30 s after the response.

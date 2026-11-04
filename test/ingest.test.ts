@@ -257,3 +257,12 @@ describe('web pages', () => {
     expect(page).toMatch(/value="PyPI" checked/);
   });
 });
+
+describe('www redirect', () => {
+  it('sends www to the canonical host with path and query', async () => {
+    const env = { ...E, SITE_URL: 'https://compromised.live' };
+    const res = await app.fetch(new Request('https://www.compromised.live/check?x=1'), env, createExecutionContext());
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('https://compromised.live/check?x=1');
+  });
+});
