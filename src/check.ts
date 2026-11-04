@@ -1,26 +1,36 @@
 import { knownExploitedCves } from './adapters/kev';
 import { isCompromised } from './adapters/osv_mal';
+import { z } from 'zod';
+import { describeRanges } from './db';
 import { affectedOf, getVuln, queryBatch, type OsvVuln } from './osv';
-import { detectFormat, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
-import { normalizeEcosystem, type Env } from './types';
-import { isAffected, nearestSafe } from './versions';
+import { detectFormat, FORMATS, parseActions, parseManifest, type Format, type Pkg, type Unresolved } from './parsers';
+import { normalizeEcosystem, type Affected, type Env } from './types';
+import { isAffected, nearestSafe, samePackage } from './versions';
 
 export const MAX_MANIFEST_BYTES = 2_000_000;
 export const MAX_PACKAGES = 5000;
 
-export interface CheckInput {
-  manifest?: string;
-  format?: Format;
-  filename?: string;
-  packages?: { ecosystem: string; name: string; version: string }[];
-  actions?: string[];
-}
+/** One schema for the HTTP API and MCP. */
+export const checkShape = {
+  packages: z
+    .array(z.object({ ecosystem: z.string(), name: z.string(), version: z.string() }))
+    .max(MAX_PACKAGES)
+    .optional()
+    .describe('Exact installed versions'),
+  manifest: z.string().optional().describe('Contents of package-lock.json, pnpm-lock.yaml, requirements.txt, poetry.lock, go.sum or a workflow file'),
+  format: z.enum(FORMATS).optional().describe('Detected automatically when omitted'),
+  actions: z.array(z.string()).max(MAX_PACKAGES).optional().describe("GitHub Actions refs like 'actions/checkout@v4.1.1'"),
+};
+export const checkSchema = z.object({ ...checkShape, filename: z.string().optional() });
+export type CheckInput = z.infer<typeof checkSchema>;
 
 export interface Fix {
   action: 'upgrade' | 'remove' | 'pin-away';
   nearest_safe?: string;
   fixed_versions?: string[];
   avoid_versions?: string[];
+  /** Affected ranges beyond the listed versions; when set, not every other version is safe. */
+  avoid_ranges?: string;
 }
 
 export interface Match {
@@ -39,10 +49,11 @@ export interface Match {
 export class CheckError extends Error {}
 
 function collect(input: CheckInput): { packages: Pkg[]; unresolved: Unresolved[] } {
+  if (!input.packages?.length && !input.manifest?.trim() && !input.actions?.length) throw new CheckError('pass packages, manifest or actions');
   const packages: Pkg[] = [];
   const unresolved: Unresolved[] = [];
   if (input.manifest) {
-    if (input.manifest.length > MAX_MANIFEST_BYTES) throw new CheckError(`manifest is over ${MAX_MANIFEST_BYTES} bytes; send packages[] instead`);
+    if (new TextEncoder().encode(input.manifest).length > MAX_MANIFEST_BYTES) throw new CheckError(`manifest is over ${MAX_MANIFEST_BYTES} bytes; send packages[] instead`);
     const format = input.format ?? detectFormat(input.manifest, input.filename);
     if (!format) throw new CheckError('could not detect the manifest format; pass format');
     try {
@@ -106,9 +117,9 @@ export async function checkDependencies(env: Env, input: CheckInput) {
   }
 
   const matches: Match[] = [];
+  const seen = packages.map(() => new Set<string>());
   for (const [i, ids] of hits.entries()) {
     const pkg = packages[i];
-    const seen = new Set<string>();
     for (const vulnId of ids) {
       const t = active.get(vulnId);
       const v = vulns.get(vulnId);
@@ -117,20 +128,11 @@ export async function checkDependencies(env: Env, input: CheckInput) {
       const kevCve = [vulnId, ...(v.aliases ?? [])].find((a) => kev.has(a));
       if (!t && !isMal && !kevCve) continue;
       const id = t?.id ?? (isMal ? vulnId : kevCve!);
-      if (seen.has(id)) continue;
-      const aff = affectedOf(v).find((a) => a.ecosystem === pkg.ecosystem && a.package === pkg.name);
+      if (seen[i].has(id)) continue;
+      const aff = combine(affectedOf(v).filter((a) => a.ecosystem === pkg.ecosystem && samePackage(pkg.ecosystem, a.package, pkg.name)));
       if (pkg.ecosystem === 'GitHub Actions' && !(aff && isAffected(pkg.ecosystem, pkg.version, aff.ranges, aff.versions))) continue;
-      const ranges = aff?.ranges ?? [];
-      const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));
-      let fix: Fix;
-      if (isMal && !fixed.length) {
-        const hijacked = t ? t.kind === 'compromised_package' : isCompromised(aff ? [aff] : []);
-        fix = hijacked && aff?.versions.length ? { action: 'pin-away', avoid_versions: aff.versions } : { action: 'remove' };
-      } else {
-        const safe = nearestSafe(pkg.ecosystem, pkg.version, ranges);
-        fix = safe ? { action: 'upgrade', nearest_safe: safe } : { action: 'upgrade', fixed_versions: fixed };
-      }
-      seen.add(id);
+      const hijacked = t ? t.kind === 'compromised_package' : isCompromised(aff ? [aff] : []);
+      seen[i].add(id);
       matches.push({
         ...pkg,
         threat_id: id,
@@ -144,10 +146,75 @@ export async function checkDependencies(env: Env, input: CheckInput) {
             : `${id} is in CISA's Known Exploited Vulnerabilities catalog: attackers have used it in the wild. Upgrade to a fixed version.`),
         // Only threats in our feed have a page here; the rest link to OSV.
         url: t ? `${env.SITE_URL}/t/${encodeURIComponent(id)}` : `https://osv.dev/vulnerability/${encodeURIComponent(vulnId)}`,
-        fix,
+        fix: fixFor(pkg, aff, isMal, hijacked),
       });
     }
   }
+
+  // Our feed can be ahead of OSV (the GHSA adapter reads GitHub directly), so also match against local affected rows.
+  for (const m of await localMatches(env, packages, seen)) matches.push(m);
+
   matches.sort((a, b) => a.tier - b.tier);
   return { scanned: packages.length, matches, unresolved };
+}
+
+function combine(affs: Affected[]): Affected | undefined {
+  if (!affs.length) return undefined;
+  return { ...affs[0], ranges: affs.flatMap((a) => a.ranges), versions: [...new Set(affs.flatMap((a) => a.versions))] };
+}
+
+function fixFor(pkg: Pkg, aff: Affected | undefined, isMal: boolean, hijacked: boolean): Fix {
+  const ranges = aff?.ranges ?? [];
+  const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));
+  if (isMal && !fixed.length) {
+    if (!hijacked || !aff?.versions.length) return { action: 'remove' };
+    return ranges.length ? { action: 'pin-away', avoid_versions: aff.versions, avoid_ranges: describeRanges(ranges, []) } : { action: 'pin-away', avoid_versions: aff.versions };
+  }
+  const safe = nearestSafe(pkg.ecosystem, pkg.version, ranges, aff?.versions ?? []);
+  return safe ? { action: 'upgrade', nearest_safe: safe } : { action: 'upgrade', fixed_versions: fixed };
+}
+
+async function localMatches(env: Env, packages: Pkg[], seen: Set<string>[]): Promise<Match[]> {
+  type Row = { ecosystem: string; package: string; ranges_json: string; versions_json: string; id: string; kind: string; tier: number; title: string; summary: string };
+  const names = [...new Set(packages.map((p) => p.name.toLowerCase()))];
+  const rows: Row[] = [];
+  for (let i = 0; i < names.length; i += 90) {
+    const chunk = names.slice(i, i + 90);
+    rows.push(
+      ...(
+        await env.DB.prepare(
+          `SELECT a.ecosystem, a.package, a.ranges_json, a.versions_json, t.id, t.kind, t.tier, t.title, t.summary
+           FROM affected a JOIN threats t ON t.id = a.threat_id
+           WHERE t.status = 'active' AND lower(a.package) IN (${chunk.map(() => '?').join(',')})`,
+        )
+          .bind(...chunk)
+          .all<Row>()
+      ).results,
+    );
+  }
+  const out: Match[] = [];
+  for (const [i, pkg] of packages.entries()) {
+    const byThreat = new Map<string, Row[]>();
+    for (const r of rows)
+      if (r.ecosystem === pkg.ecosystem && samePackage(pkg.ecosystem, r.package, pkg.name) && !seen[i].has(r.id))
+        byThreat.set(r.id, [...(byThreat.get(r.id) ?? []), r]);
+    for (const [id, rs] of byThreat) {
+      const aff = combine(rs.map((r) => ({ ecosystem: r.ecosystem, package: r.package, ranges: JSON.parse(r.ranges_json), versions: JSON.parse(r.versions_json) })))!;
+      if (!isAffected(pkg.ecosystem, pkg.version, aff.ranges, aff.versions)) continue;
+      const t = rs[0];
+      const isMal = t.kind !== 'exploited_vuln';
+      seen[i].add(id);
+      out.push({
+        ...pkg,
+        threat_id: id,
+        kind: t.kind,
+        tier: t.tier,
+        title: t.title,
+        summary: t.summary,
+        url: `${env.SITE_URL}/t/${encodeURIComponent(id)}`,
+        fix: fixFor(pkg, aff, isMal, t.kind === 'compromised_package'),
+      });
+    }
+  }
+  return out;
 }

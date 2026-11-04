@@ -87,17 +87,16 @@ export const ghsa: Adapter = {
     };
     if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
 
+    // Oldest first from the cursor (inclusive), so a capped run resumes where it stopped instead of skipping.
     const fresh: GhsaAdvisory[] = [];
-    let url: string | null = `${API}?type=malware&sort=updated&direction=desc&per_page=100`;
-    // ponytail: capped at 300 per run; anything past that still arrives via OSV about an hour later.
+    let url: string | null = `${API}?type=malware&sort=updated&direction=asc&per_page=100&updated=${encodeURIComponent(`>=${since.replace(/\.\d+Z$/, 'Z')}`)}`;
     for (let page = 0; page < MAX_PAGES && url; page++) {
       const res: Response = await fetch(url, { headers });
       if (!res.ok) throw new Error(`GitHub advisories: ${res.status}`);
-      const items = (await res.json()) as GhsaAdvisory[];
-      const newer = items.filter((a) => a.updated_at > since);
-      fresh.push(...newer);
-      if (newer.length < items.length) break;
-      url = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null;
+      fresh.push(...((await res.json()) as GhsaAdvisory[]));
+      const next = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null;
+      // Only follow pagination on GitHub's API host, since the request carries the token.
+      url = next && new URL(next).origin === new URL(API).origin ? next : null;
     }
 
     const records = await Promise.all(
@@ -107,6 +106,6 @@ export const ghsa: Adapter = {
         return { ...rec, kind: malKind(rec.affected, counts) };
       }),
     );
-    return { records, cursor: fresh[0]?.updated_at ?? since };
+    return { records, cursor: fresh.at(-1)?.updated_at ?? since };
   },
 };

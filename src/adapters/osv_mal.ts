@@ -1,5 +1,6 @@
 import { affectedOf, getVuln, severityOf, type OsvVuln } from '../osv';
 import { ECOSYSTEMS, type Adapter, type Affected, type Kind, type SourceRecord } from '../types';
+import { isAffected } from '../versions';
 
 const BUCKET = 'https://storage.googleapis.com/osv-vulnerabilities';
 const FIRST_RUN_DAYS = 3;
@@ -24,7 +25,7 @@ export async function cleanReleaseCount(a: Affected): Promise<number | null> {
     if (!res.ok) return null;
     releases = Object.keys(((await res.json()) as { releases?: object }).releases ?? {});
   } else return null;
-  return releases.filter((v) => !a.versions.includes(v) && !v.includes('security')).length;
+  return releases.filter((v) => !isAffected(a.ecosystem, v, a.ranges, a.versions) && !v.includes('security')).length;
 }
 
 /**
@@ -68,7 +69,7 @@ export function malRecord(v: OsvVuln): SourceRecord {
   };
 }
 
-/** Reads modified_id.csv (newest first) until it reaches the saved timestamp; returns MAL ids oldest first. */
+/** Reads modified_id.csv (newest first) down to and including the saved timestamp; returns MAL ids oldest first. */
 async function newMalIds(ecosystem: string, since: string): Promise<{ id: string; ts: string }[]> {
   const res = await fetch(`${BUCKET}/${encodeURIComponent(ecosystem)}/modified_id.csv`);
   if (!res.ok || !res.body) throw new Error(`OSV ${ecosystem} modified_id.csv: ${res.status}`);
@@ -83,7 +84,7 @@ async function newMalIds(ecosystem: string, since: string): Promise<{ id: string
     buf = lines.pop()!;
     for (const line of lines) {
       const [ts, id] = line.split(',');
-      if (!id || ts <= since) break read;
+      if (!id || ts < since) break read;
       if (id.startsWith('MAL-')) out.push({ id, ts });
     }
   }
@@ -91,18 +92,27 @@ async function newMalIds(ecosystem: string, since: string): Promise<{ id: string
   return out.reverse();
 }
 
+/** Per ecosystem: the last timestamp read and the ids already done at it, since many ids can share one timestamp. */
+type Cursor = Record<string, { ts: string; ids: string[] }>;
+
 export const osvMal: Adapter = {
   name: 'osv_mal',
   async run(_env, cursor, now) {
-    const prev: Record<string, string> = cursor ? JSON.parse(cursor) : {};
+    const raw: Record<string, string | { ts: string; ids: string[] }> = cursor ? JSON.parse(cursor) : {};
+    const prev: Cursor = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? { ts: v, ids: [] } : v]));
     const firstRun = new Date(now.getTime() - FIRST_RUN_DAYS * 864e5).toISOString();
-    const next = { ...prev };
+    const next: Cursor = { ...prev };
     const records: SourceRecord[] = [];
     for (const eco of ECOSYSTEMS) {
-      const ids = (await newMalIds(eco, prev[eco] ?? firstRun)).slice(0, MAX_PER_ECOSYSTEM);
+      const p = prev[eco] ?? { ts: firstRun, ids: [] };
+      const done = new Set(p.ids);
+      const ids = (await newMalIds(eco, p.ts)).filter((x) => !(x.ts === p.ts && done.has(x.id))).slice(0, MAX_PER_ECOSYSTEM);
       const vulns = await Promise.all(ids.map((x) => getVuln(x.id)));
       records.push(...(await Promise.all(vulns.filter((v): v is OsvVuln => !!v).map(malRecordWithRegistry))));
-      if (ids.length) next[eco] = ids[ids.length - 1].ts;
+      if (ids.length) {
+        const ts = ids[ids.length - 1].ts;
+        next[eco] = { ts, ids: [...(ts === p.ts ? p.ids : []), ...ids.filter((x) => x.ts === ts).map((x) => x.id)] };
+      }
     }
     return { records, cursor: JSON.stringify(next) };
   },

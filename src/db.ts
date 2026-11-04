@@ -59,18 +59,23 @@ export interface AffectedOut {
   fixed: string[];
 }
 
+/** The affected set as a union: one interval per introduced..fixed/last_affected pair, plus any listed versions. */
 export function describeRanges(ranges: OsvRange[], versions: string[]): string {
-  const parts = ranges.map((r) => {
-    const out: string[] = [];
+  const intervals: string[] = [];
+  for (const r of ranges) {
+    let from: string | undefined;
     for (const e of r.events) {
-      if (e.introduced) out.push(e.introduced === '0' ? 'all versions' : `>= ${e.introduced}`);
-      if (e.fixed) out.push(`< ${e.fixed}`);
-      if (e.last_affected) out.push(`<= ${e.last_affected}`);
+      if (e.introduced !== undefined) from = e.introduced;
+      const end = e.fixed !== undefined ? `< ${e.fixed}` : e.last_affected !== undefined ? `<= ${e.last_affected}` : undefined;
+      if (end !== undefined) {
+        intervals.push(!from || from === '0' ? end : `>= ${from}, ${end}`);
+        from = undefined;
+      }
     }
-    return out.join(' ');
-  });
-  if (!parts.length || (versions.length && versions.length <= 6)) return versions.join(', ') || 'unknown';
-  return parts.join(' || ');
+    if (from !== undefined) intervals.push(from === '0' ? 'all versions' : `>= ${from}`);
+  }
+  const parts = [...intervals, ...(versions.length ? [versions.join(', ')] : [])];
+  return parts.join(' or ') || 'unknown';
 }
 
 function toAffectedOut(r: { ecosystem: string; package: string; ranges_json: string; versions_json: string }): AffectedOut {
@@ -157,18 +162,25 @@ export async function getThreat(env: Env, idOrAlias: string) {
 
 export interface SourceStatus {
   lastRun: string | null;
+  sources: Record<string, string | null>;
   kevVersion: string | null;
   epssDate: string | null;
   osvAt: string | null;
 }
+
+/** Every adapter in ingest.ts ADAPTERS; listed here to avoid an import cycle. */
+export const SOURCES = ['kev', 'epss', 'ghsa', 'osv_mal'] as const;
 
 /** Freshness for the status strip, read from the adapter cursors. */
 export async function sourceStatus(env: Env): Promise<SourceStatus> {
   const rows = (await env.DB.prepare('SELECT source, cursor, updated_at FROM cursors').all<{ source: string; cursor: string; updated_at: string }>()).results;
   const by = Object.fromEntries(rows.map((r) => [r.source, r]));
   const json = (s: string | undefined) => (s ? (JSON.parse(s) as Record<string, unknown>) : {});
+  const runs = SOURCES.map((s) => by[s]?.updated_at);
   return {
-    lastRun: rows.map((r) => r.updated_at).sort().at(-1) ?? null,
+    // The oldest source decides freshness: one healthy adapter must not hide a failing one.
+    lastRun: runs.every(Boolean) ? (runs as string[]).sort()[0] : null,
+    sources: Object.fromEntries(SOURCES.map((s, i) => [s, runs[i] ?? null])),
     kevVersion: (json(by.kev?.cursor).version as string) ?? null,
     epssDate: (json(by.epss?.cursor).date as string) ?? null,
     osvAt: by.osv_mal?.updated_at ?? null,

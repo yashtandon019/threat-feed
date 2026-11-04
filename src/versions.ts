@@ -35,13 +35,21 @@ export function isAffected(ecosystem: string, version: string, ranges: OsvRange[
   });
 }
 
-/** The lowest fixed version above `version` across all ranges, or undefined if none or no comparator. */
-export function nearestSafe(ecosystem: string, version: string, ranges: OsvRange[]): string | undefined {
+/** The lowest fixed version above `version` that no range or listed version still covers; undefined if none or no comparator. */
+export function nearestSafe(ecosystem: string, version: string, ranges: OsvRange[], versions: string[] = []): string | undefined {
   const fixed = ranges.flatMap((r) => r.events.map((e) => e.fixed).filter((f): f is string => !!f));
   let best: string | undefined;
   for (const f of fixed) {
     if ((compareVersions(ecosystem, f, version) ?? -1) <= 0) continue;
+    if (isAffected(ecosystem, f, ranges, versions)) continue;
     if (!best || (compareVersions(ecosystem, f, best) ?? 1) < 0) best = f;
   }
   return best;
+}
+
+/** Package names as each registry compares them. */
+export function samePackage(ecosystem: string, a: string, b: string): boolean {
+  if (ecosystem === 'PyPI') return a.toLowerCase().replace(/[-_.]+/g, '-') === b.toLowerCase().replace(/[-_.]+/g, '-');
+  if (ecosystem === 'GitHub Actions') return a.toLowerCase() === b.toLowerCase();
+  return a === b;
 }

@@ -3,10 +3,11 @@ import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ghsaRecord, parseGhsaRange } from '../src/adapters/ghsa';
 import { kevRecords } from '../src/adapters/kev';
-import { isCompromised, malRecord } from '../src/adapters/osv_mal';
+import { epss } from '../src/adapters/epss';
+import { cleanReleaseCount, isCompromised, malRecord, osvMal } from '../src/adapters/osv_mal';
 import { getThreat, listThreats, parseFilters } from '../src/db';
 import { rss } from '../src/feeds';
-import { computeTier, upsert } from '../src/ingest';
+import { ageTiers, computeTier, upsert } from '../src/ingest';
 import type { OsvVuln } from '../src/osv';
 import { userPrompt } from '../src/summarize';
 import type { Env } from '../src/types';
@@ -154,7 +155,7 @@ describe('outputs', () => {
     const body = (await res.json()) as { scanned: number; matches: { name: string; fix: object }[] };
     expect(body.scanned).toBe(3);
     expect(body.matches.map((m) => [m.name, m.fix])).toEqual([
-      ['@ctrl/tinycolor', { action: 'pin-away', avoid_versions: ['4.1.1', '4.1.2'] }],
+      ['@ctrl/tinycolor', { action: 'pin-away', avoid_versions: ['4.1.1', '4.1.2'], avoid_ranges: '>= 4.1.1, <= 4.1.2' }],
       ['old-bad', { action: 'remove' }],
     ]);
   });
@@ -308,16 +309,91 @@ describe('about, health, rate limits and report links', () => {
     expect(page).toContain('never stored or logged');
     expect(page).toContain('/issues/new?template=report.yml');
   });
-  it('reports health from the cursor timestamps', async () => {
-    await E.DB.prepare("INSERT INTO cursors (source, cursor, updated_at) VALUES ('osv_mal', '{}', ?) ON CONFLICT (source) DO UPDATE SET updated_at = excluded.updated_at")
-      .bind(new Date().toISOString()).run();
-    const res = await get('/health');
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  it('reports health only when every source is fresh', async () => {
+    const put = (source: string, at: string) =>
+      E.DB.prepare('INSERT INTO cursors (source, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT (source) DO UPDATE SET updated_at = excluded.updated_at')
+        .bind(source, '{}', at)
+        .run();
+    const now = new Date().toISOString();
+    for (const s of ['kev', 'epss', 'ghsa', 'osv_mal']) await put(s, now);
+    expect((await get('/health')).status).toBe(200);
+    await put('kev', '2020-01-01T00:00:00Z');
+    expect((await get('/health')).status).toBe(503);
   });
   it('returns 429 when the rate limiter says no', async () => {
     const env = { ...E, CHECK_LIMIT: { limit: async () => ({ success: false }) } as unknown as RateLimit };
     const res = await app.fetch(new Request('http://x/api/v1/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }), env, createExecutionContext());
     expect(res.status).toBe(429);
+  });
+});
+
+describe('review regressions', () => {
+  const check = (body: string, type = 'application/json') =>
+    app.fetch(new Request('http://x/api/v1/check', { method: 'POST', headers: { 'content-type': type }, body }), E, createExecutionContext());
+
+  it('rejects malformed or empty JSON instead of reporting a clean scan', async () => {
+    expect((await check('{invalid')).status).toBe(400);
+    expect((await check('{}')).status).toBe(400);
+    expect((await check(JSON.stringify({ packages: 'nope' }))).status).toBe(400);
+  });
+
+  it('rejects an oversized body with 413 before parsing it', async () => {
+    expect((await check('x'.repeat(2_600_000), 'text/plain')).status).toBe(413);
+  });
+
+  it('matches threats already in the feed even when OSV has not indexed them', async () => {
+    await upsert(E, malRecord(hijacked), NOW);
+    stubOsv({});
+    const res = await check(JSON.stringify({ packages: [{ ecosystem: 'npm', name: '@ctrl/tinycolor', version: '4.1.1' }] }));
+    expect(((await res.json()) as { matches: { threat_id: string }[] }).matches.map((m) => m.threat_id)).toEqual(['MAL-2025-47141']);
+  });
+
+  it('retries a record whose threat write failed', async () => {
+    const rec = malRecord({ ...typosquat, id: 'MAL-RETRY' });
+    vi.spyOn(E.DB, 'batch').mockRejectedValueOnce(new Error('D1 down'));
+    await expect(upsert(E, rec, NOW)).rejects.toThrow('D1 down');
+    vi.restoreAllMocks();
+    await upsert(E, rec, NOW);
+    expect(await getThreat(E, 'MAL-RETRY')).not.toBeNull();
+  });
+
+  it('ages KEV entries out of tier 1 after 14 days', async () => {
+    await E.DB.prepare(
+      `INSERT INTO threats (id, kind, tier, title, severity, details, summary, summary_model, content_hash, kev_added, status, first_seen, updated_at, last_signal_at)
+       VALUES ('CVE-AGE', 'exploited_vuln', 1, 't', 'high', '', 's', 'template', 'h', '2026-11-01', 'active', ?, ?, ?)`,
+    )
+      .bind(NOW.toISOString(), NOW.toISOString(), NOW.toISOString())
+      .run();
+    await ageTiers(E, new Date('2026-11-20T00:00:00Z'));
+    expect((await E.DB.prepare("SELECT tier FROM threats WHERE id = 'CVE-AGE'").first<{ tier: number }>())?.tier).toBe(2);
+  });
+
+  it('does not count releases inside a malicious range as clean', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ versions: Object.fromEntries([...Array(10)].map((_, i) => [`1.0.${i}`, {}])) }));
+    expect(await cleanReleaseCount({ ecosystem: 'npm', package: 'x', ranges: [{ type: 'SEMVER', events: [{ introduced: '0' }] }], versions: [] })).toBe(0);
+  });
+
+  it('does not skip OSV ids that share a timestamp past the per-run cap', async () => {
+    const csv = [...Array(41)].map((_, i) => `2026-11-04T00:00:00Z,MAL-T${i}`).join('\n') + '\n2026-11-01T00:00:00Z,MAL-OLD\n';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/npm/modified_id.csv')) return new Response(csv);
+      if (url.endsWith('modified_id.csv')) return new Response('');
+      return new Response('not found', { status: 404 });
+    });
+    const start = JSON.stringify({ npm: '2026-11-03T00:00:00Z' });
+    const first = await osvMal.run(E, start, NOW);
+    const second = await osvMal.run(E, first.cursor, NOW);
+    expect(JSON.parse(first.cursor!).npm.ids).toHaveLength(40);
+    expect(JSON.parse(second.cursor!).npm.ids).toHaveLength(41);
+  });
+
+  it('emits EPSS crossings past the per-run cap on the next run', async () => {
+    const data = [...Array(250)].map((_, i) => ({ cve: `CVE-2026-${i}`, epss: '0.6', date: '2026-11-04' }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ data }));
+    const first = await epss.run(E, JSON.stringify({ date: '2026-11-03', cves: [] }), NOW);
+    const second = await epss.run(E, first.cursor, NOW);
+    const third = await epss.run(E, second.cursor, NOW);
+    expect([first.records.length, second.records.length, third.records.length]).toEqual([200, 50, 0]);
   });
 });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { detectFormat, parseActions, parseManifest, parsePnpmKey } from '../src/parsers';
 import type { OsvRange } from '../src/types';
-import { isAffected, nearestSafe } from '../src/versions';
+import { describeRanges } from '../src/db';
+import { isAffected, nearestSafe, samePackage } from '../src/versions';
 
 const PACKAGE_LOCK = JSON.stringify({
   lockfileVersion: 3,
@@ -58,7 +59,7 @@ describe('parsers', () => {
       { ecosystem: 'PyPI', name: 'django', version: '3.2.0' },
       { ecosystem: 'PyPI', name: 'requests', version: '2.31.0' },
     ]);
-    expect(r.unresolved.map((u) => u.entry)).toEqual(['flask>=2']);
+    expect(r.unresolved.map((u) => u.entry)).toEqual(['flask>=2', '-r other.txt']);
   });
 
   it('reads poetry.lock and go.sum', () => {
@@ -82,13 +83,39 @@ describe('parsers', () => {
   });
 });
 
+describe('review regressions', () => {
+  it('keeps pnpm package names that contain underscores', () => {
+    expect(parsePnpmKey('evil_pkg@1.0.0')).toEqual({ ecosystem: 'npm', name: 'evil_pkg', version: '1.0.0' });
+    expect(parsePnpmKey('/@scope/evil_pkg@1.0.0')).toEqual({ ecosystem: 'npm', name: '@scope/evil_pkg', version: '1.0.0' });
+    expect(parsePnpmKey('/foo/1.0.0_react@17.0.0')).toEqual({ ecosystem: 'npm', name: 'foo', version: '1.0.0' });
+  });
+
+  it('reads real uses: values, so comments and run lines cannot hide or fake an action', () => {
+    const wf = 'jobs:\n  a:\n    steps:\n      - uses: tj-actions/changed-files@v45.0.7 # docker://x\n      - run: echo me@example.com\n';
+    const r = parseManifest(wf, 'actions');
+    expect(r.packages).toEqual([{ ecosystem: 'GitHub Actions', name: 'tj-actions/changed-files', version: '45.0.7' }]);
+    expect(r.unresolved).toEqual([]);
+    expect(parseActions(['owner/repo@v1.2.3/branch']).packages).toEqual([]);
+  });
+
+  it('describes the affected set as a union', () => {
+    expect(describeRanges([{ type: 'SEMVER', events: [{ introduced: '0' }, { fixed: '2.0.0' }] }], ['1.0.0'])).toBe('< 2.0.0 or 1.0.0');
+    expect(describeRanges([{ type: 'SEMVER', events: [{ introduced: '1' }, { fixed: '2' }, { introduced: '3' }, { fixed: '4' }] }], [])).toBe('>= 1, < 2 or >= 3, < 4');
+  });
+
+  it('compares PyPI names the way pip does', () => {
+    expect(samePackage('PyPI', 'Foo_Bar', 'foo-bar')).toBe(true);
+  });
+});
+
 describe('nearestSafe', () => {
   const ranges: OsvRange[] = [
     { type: 'SEMVER', events: [{ introduced: '0' }, { fixed: '4.17.21' }] },
     { type: 'SEMVER', events: [{ introduced: '4.0.0' }, { fixed: '4.18.0' }] },
   ];
   it('picks the lowest fixed version above the installed one', () => {
-    expect(nearestSafe('npm', '4.17.15', ranges)).toBe('4.17.21');
+    // 4.17.21 still falls inside the second range, so it is not safe.
+    expect(nearestSafe('npm', '4.17.15', ranges)).toBe('4.18.0');
     expect(nearestSafe('npm', '4.17.21', ranges)).toBe('4.18.0');
   });
   it('uses PEP 440 ordering for PyPI', () => {

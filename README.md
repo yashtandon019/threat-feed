@@ -2,7 +2,7 @@
 
 A free, no-login live feed of security threats that are happening now, not every CVE:
 
-- **Exploited vulnerabilities:** new CISA KEV entries, and CVEs whose EPSS score just crossed 0.5 (only when they map to a package).
+- **Exploited vulnerabilities:** new CISA KEV entries (observed exploitation), and CVEs whose EPSS score just crossed 0.5 (a predicted likelihood, only when they map to a package).
 - **Supply chain attacks:** malicious and hijacked packages and GitHub Actions, read directly from GitHub's malware advisories (minutes old) and from OSV (OpenSSF Malicious Packages).
 
 It serves a web feed, RSS/Atom/JSON Feed, a JSON API, `llms.txt`, and a remote MCP server with a `check_dependencies` tool.
@@ -21,7 +21,7 @@ Stack: TypeScript, Hono on Cloudflare Workers, D1, a Cron Trigger every 10 minut
 | `/mcp` | MCP over Streamable HTTP, no auth: `list_feed`, `get_threat`, `check_dependencies` |
 | `/llms.txt` | Agent-facing index |
 | `/about` | What counts as active, privacy, sources, contact |
-| `/health` | 200 when the cron ran in the last 30 minutes, else 503 (for uptime monitors) |
+| `/health` | 200 when every source (KEV, EPSS, GHSA, OSV) ran in the last 30 minutes, else 503 with per-source ages (for uptime monitors) |
 
 ```bash
 curl -s -X POST "http://localhost:8787/api/v1/check?filename=package-lock.json" --data-binary @package-lock.json
@@ -125,8 +125,10 @@ jobs:
         run: |
           curl -sf --data-binary @package-lock.json \
             "https://compromised.live/api/v1/check?filename=package-lock.json" > result.json
-          jq '.matches[] | "\(.name)@\(.version): \(.title) (\(.threat_id))"' result.json
-          jq -e '.matches | length == 0' result.json > /dev/null
+          jq -r '.matches[] | "\(.name)@\(.version): \(.title) (\(.threat_id))"' result.json
+          jq -r '.unresolved[] | "not checked: \(.entry) (\(.reason))"' result.json
+          # An empty or partial scan is not a pass.
+          jq -e '.scanned > 0 and (.matches | length == 0) and (.unresolved | length == 0)' result.json > /dev/null
 ```
 
 `/api/v1/check` and `/mcp` are rate-limited per IP (20 and 60 requests a minute).

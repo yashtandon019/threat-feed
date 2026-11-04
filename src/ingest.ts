@@ -110,34 +110,38 @@ export async function upsert(env: Env, rec: SourceRecord, now: Date): Promise<st
   const id = hits[0]?.id ?? rec.sourceId;
   const firstSeen = hits[0]?.first_seen ?? ts;
   const absorbed = hits.slice(1).map((h) => h.id);
-  if (absorbed.length) {
-    const ph = placeholders(absorbed.length);
-    await db.batch([
-      db.prepare(`UPDATE aliases SET threat_id = ? WHERE threat_id IN (${ph})`).bind(id, ...absorbed),
-      db.prepare(`UPDATE source_records SET threat_id = ? WHERE threat_id IN (${ph})`).bind(id, ...absorbed),
-      db.prepare(`DELETE FROM affected WHERE threat_id IN (${ph})`).bind(...absorbed),
-      db.prepare(`DELETE FROM threats WHERE id IN (${ph})`).bind(...absorbed),
-    ]);
-  }
 
-  await db
-    .prepare(
-      `INSERT INTO source_records (source, source_id, threat_id, url, content_hash, record_json, fetched_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (source, source_id) DO UPDATE SET threat_id = excluded.threat_id, url = excluded.url,
-         content_hash = excluded.content_hash, record_json = excluded.record_json, fetched_at = excluded.fetched_at`,
-    )
-    .bind(rec.source, rec.sourceId, id, rec.url, hash, JSON.stringify(rec), ts)
-    .run();
-
-  const all = (
-    await db.prepare('SELECT record_json FROM source_records WHERE threat_id = ?').bind(id).all<{ record_json: string }>()
-  ).results.map((r) => JSON.parse(r.record_json) as SourceRecord);
-  const m = merge(all);
+  // Merge from what's stored for this threat and any it absorbs, with this record in place of its old version.
+  const owners = [id, ...absorbed];
+  const stored = (
+    await db
+      .prepare(`SELECT source, source_id, record_json FROM source_records WHERE threat_id IN (${placeholders(owners.length)})`)
+      .bind(...owners)
+      .all<{ source: string; source_id: string; record_json: string }>()
+  ).results.filter((r) => !(r.source === rec.source && r.source_id === rec.sourceId));
+  const m = merge([...stored.map((r) => JSON.parse(r.record_json) as SourceRecord), rec]);
   const contentHash = await sha256(JSON.stringify(m));
   const tier = computeTier(m, now);
+  const ph = placeholders(absorbed.length);
 
+  // One batch is one transaction: the source hash is only stored if the threat lands too, so a failed run retries.
   await db.batch([
+    ...(absorbed.length
+      ? [
+          db.prepare(`UPDATE aliases SET threat_id = ? WHERE threat_id IN (${ph})`).bind(id, ...absorbed),
+          db.prepare(`UPDATE source_records SET threat_id = ? WHERE threat_id IN (${ph})`).bind(id, ...absorbed),
+          db.prepare(`DELETE FROM affected WHERE threat_id IN (${ph})`).bind(...absorbed),
+          db.prepare(`DELETE FROM threats WHERE id IN (${ph})`).bind(...absorbed),
+        ]
+      : []),
+    db
+      .prepare(
+        `INSERT INTO source_records (source, source_id, threat_id, url, content_hash, record_json, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (source, source_id) DO UPDATE SET threat_id = excluded.threat_id, url = excluded.url,
+           content_hash = excluded.content_hash, record_json = excluded.record_json, fetched_at = excluded.fetched_at`,
+      )
+      .bind(rec.source, rec.sourceId, id, rec.url, hash, JSON.stringify(rec), ts),
     db
       .prepare(
         `INSERT INTO threats (id, kind, tier, title, severity, details, summary, summary_model, summary_hash, content_hash,
@@ -193,5 +197,15 @@ export async function runIngest(env: Env, now = new Date()) {
       results.push({ source: adapter.name, records: 0, changed: 0, error: String(err) });
     }
   }
+  await ageTiers(env, now);
   return results;
+}
+
+/** Tiers are computed on change; KEV entries also age out of tier 1 with time alone. */
+export async function ageTiers(env: Env, now: Date) {
+  await env.DB.prepare(
+    "UPDATE threats SET tier = 2 WHERE tier = 1 AND kind = 'exploited_vuln' AND kev_added IS NOT NULL AND kev_added < ?",
+  )
+    .bind(new Date(now.getTime() - KEV_HOT_DAYS * 864e5).toISOString().slice(0, 10))
+    .run();
 }

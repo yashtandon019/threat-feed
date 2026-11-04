@@ -233,13 +233,13 @@ export function feedPage(
   const bulkTotal = bulk.reduce((n, b) => n + b.n, 0);
   const mcp = `${site.url}/mcp`;
   return layout(
-    'Threats being exploited right now',
+    'Active security threats right now',
     site,
     'feed',
     html`<main class="wrap">
 <section class="hero"><div>
-<h1>Threats being exploited right now</h1>
-<p class="lede">Exploited vulnerabilities and malicious packages from CISA KEV, EPSS and OSV, merged into one feed. Checked every 10 minutes. Not every CVE: only the ones with proof of attacks or malware.</p>
+<h1>Active security threats right now</h1>
+<p class="lede">Exploited vulnerabilities and malicious packages from CISA KEV, EPSS and OSV, merged into one feed. Checked every 10 minutes. Not every CVE: only ones with evidence of attacks or malware, plus CVEs that EPSS predicts are likely to be exploited soon.</p>
 </div><div>
 <div class="btns"><a class="btn" href="/feed.xml">RSS</a><a class="btn" href="/feed.atom">Atom</a><a class="btn" href="/feed.json">JSON Feed</a><a class="btn" href="/api/v1/threats">JSON API</a></div>
 <div id="mcp" style="display:flex;flex-direction:column;gap:4px"><label class="label" for="mcp-url">MCP server for your agent</label>
@@ -373,7 +373,8 @@ const FORMAT_CHOICES: [string, string][] = [
 function fixText(m: Match): [string, string] {
   const f = m.fix;
   if (f.action === 'remove') return ['None. Remove it.', 'Rotate secrets from a different machine'];
-  if (f.action === 'pin-away') return [`Any version except ${f.avoid_versions?.join(', ')}`, 'Rotate secrets on machines that installed it'];
+  if (f.action === 'pin-away')
+    return [f.avoid_ranges ? `Avoid ${f.avoid_versions?.join(', ')} and ${f.avoid_ranges}` : `Any version except ${f.avoid_versions?.join(', ')}`, 'Rotate secrets on machines that installed it'];
   if (f.nearest_safe) return [f.nearest_safe, m.kind === 'exploited_vuln' ? 'Check for signs of compromise' : 'Upgrade and redeploy'];
   return [f.fixed_versions?.length ? f.fixed_versions.join(', ') : 'No fix listed', 'Check the vendor advisory'];
 }
@@ -391,8 +392,10 @@ jobs:
         run: |
           curl -sf --data-binary @package-lock.json \\
             "${siteUrl}/api/v1/check?filename=package-lock.json" > result.json
-          jq '.matches[] | "\\(.name)@\\(.version): \\(.title) (\\(.threat_id))"' result.json
-          jq -e '.matches | length == 0' result.json > /dev/null`;
+          jq -r '.matches[] | "\\(.name)@\\(.version): \\(.title) (\\(.threat_id))"' result.json
+          jq -r '.unresolved[] | "not checked: \\(.entry) (\\(.reason))"' result.json
+          # An empty or partial scan is not a pass.
+          jq -e '.scanned > 0 and (.matches | length == 0) and (.unresolved | length == 0)' result.json > /dev/null`;
 
 export function checkPage(v: CheckView, site: Site) {
   const r = v.result;
@@ -459,12 +462,12 @@ export function aboutPage(site: Site) {
     'about',
     html`<main class="wrap" style="max-width:860px">
 <section style="display:flex;flex-direction:column;gap:8px"><h1>About ${site.name}</h1>
-<p class="lede">A free, no-login feed of security threats that are being exploited right now, with a dependency checker for people and AI agents.</p></section>
+<p class="lede">A free, no-login feed of security threats that are active right now, with a dependency checker for people and AI agents.</p></section>
 
-${sec('What counts as active', html`<p>Not every CVE. An item makes the feed only with evidence of real attacks or malware:</p>
+${sec('What counts as active', html`<p>Not every CVE. An item makes the feed with evidence of real attacks or malware, or a high predicted chance of exploitation:</p>
 <ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">
 <li><strong>Act now:</strong> added to CISA's Known Exploited Vulnerabilities catalog in the last 14 days, a hijacked release of a real package, or a poisoned GitHub Action.</li>
-<li><strong>Watch:</strong> older KEV entries, and CVEs whose EPSS exploitation score just crossed 0.5 and that map to a package.</li>
+<li><strong>Watch:</strong> older KEV entries, and CVEs whose EPSS score just crossed 0.5 and that map to a package. EPSS is a predicted probability of exploitation in the next 30 days, not proof of attacks.</li>
 <li><strong>Bulk:</strong> packages that were malicious from day one (typosquats). Hidden from the main list but always caught by the dependency checker.</li></ul>`)}
 
 ${sec('Privacy: what happens to your lockfile', html`<ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">

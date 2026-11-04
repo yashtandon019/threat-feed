@@ -1,8 +1,7 @@
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { CheckError, checkDependencies } from './check';
+import { CheckError, checkDependencies, checkShape } from './check';
 import { getThreat, listThreats, parseFilters } from './db';
-import { FORMATS } from './parsers';
 import { KINDS, type Env } from './types';
 
 const UNTRUSTED =
@@ -17,7 +16,7 @@ function server(env: Env) {
   s.registerTool(
     'list_feed',
     {
-      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, rising EPSS) and malicious or compromised packages and GitHub Actions. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware. ${UNTRUSTED}`,
+      description: `Recent active security threats: exploited vulnerabilities (CISA KEV, observed) and likely-to-be-exploited ones (EPSS over 0.5, predicted only; kev is null) and malicious or compromised packages and GitHub Actions. Tier 1 = act now, 2 = elevated, 3 = bulk typosquat malware. ${UNTRUSTED}`,
       inputSchema: z.object({
         ecosystem: z.array(z.string()).optional().describe('npm, PyPI, Go, crates.io, Maven, NuGet, RubyGems, Packagist, GitHub Actions'),
         kind: z.array(z.enum(KINDS)).optional(),
@@ -49,15 +48,7 @@ function server(env: Env) {
     'check_dependencies',
     {
       description: `Check dependencies against active threats and known malicious packages. Prefer 'packages' (cheap) over pasting a whole lockfile. Returns matches with the nearest safe version, plus entries that could not be checked (unpinned requirements, moving action tags). ${UNTRUSTED}`,
-      inputSchema: z.object({
-        packages: z
-          .array(z.object({ ecosystem: z.string(), name: z.string(), version: z.string() }))
-          .optional()
-          .describe('Exact installed versions'),
-        manifest: z.string().optional().describe('Contents of package-lock.json, pnpm-lock.yaml, requirements.txt, poetry.lock, go.sum or a workflow file'),
-        format: z.enum(FORMATS).optional().describe('Detected automatically when omitted'),
-        actions: z.array(z.string()).optional().describe("GitHub Actions refs like 'actions/checkout@v4.1.1'"),
-      }),
+      inputSchema: z.object(checkShape),
     },
     async (a) => {
       if (!a.packages?.length && !a.manifest && !a.actions?.length) return fail('Pass packages, manifest or actions.');

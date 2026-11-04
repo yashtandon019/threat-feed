@@ -1,9 +1,10 @@
 import { Hono, type Context } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
+import { bodyLimit } from 'hono/body-limit';
 import { cache } from 'hono/cache';
 import { secureHeaders } from 'hono/secure-headers';
 import { timingSafeEqual } from 'hono/utils/buffer';
-import { CheckError, checkDependencies, type CheckInput } from './check';
+import { CheckError, checkDependencies, checkSchema, MAX_MANIFEST_BYTES, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
 import { aboutPage, checkPage, FAVICON_SVG, feedPage, JS, threatPage } from './html';
@@ -54,13 +55,15 @@ const tooMany = (c: Context) => c.json({ error: 'Too many requests. Try again in
 
 app.all('/mcp', async (c) => ((await allowed(c, 'MCP_LIMIT')) ? mcpFetch(c.env, c.req.raw) : tooMany(c)));
 
-// For uptime monitors: 503 when the cron hasn't completed a run for 30 minutes.
+// For uptime monitors: 503 when any source hasn't completed a run for 30 minutes.
 app.get('/health', async (c) => {
   const s = await sourceStatus(c.env);
-  const minutes = s.lastRun ? Math.round((Date.now() - Date.parse(s.lastRun)) / 60000) : null;
+  const age = (t: string | null) => (t ? Math.round((Date.now() - Date.parse(t)) / 60000) : null);
+  const sources = Object.fromEntries(Object.entries(s.sources).map(([k, t]) => [k, { last_run: t, minutes_since_last_run: age(t) }]));
+  const minutes = age(s.lastRun);
   const ok = minutes !== null && minutes <= 30;
   return c.json(
-    { ok, last_run: s.lastRun, minutes_since_last_run: minutes, kev_catalog: s.kevVersion, epss_date: s.epssDate },
+    { ok, last_run: s.lastRun, minutes_since_last_run: minutes, sources, kev_catalog: s.kevVersion, epss_date: s.epssDate },
     ok ? 200 : 503,
     { 'cache-control': 'no-store' },
   );
@@ -78,11 +81,26 @@ app.post(
   },
 );
 
-app.post('/api/v1/check', async (c) => {
-  if (!(await allowed(c, 'CHECK_LIMIT'))) return tooMany(c);
+const site = (env: Env) => ({ name: env.SITE_NAME, url: env.SITE_URL, repo: env.REPO_URL });
+
+// Rate limit first, then cap the body while it streams in, before anything parses it.
+const checkGate = async (c: Context<{ Bindings: Env }>, next: () => Promise<void>) => {
+  if (await allowed(c, 'CHECK_LIMIT')) return next();
+  return c.req.path === '/check'
+    ? c.html(checkPage({ manifest: '', format: '', error: 'Too many checks from your network. Try again in a minute.' }, site(c.env)), 429)
+    : tooMany(c);
+};
+const capBody = bodyLimit({
+  maxSize: MAX_MANIFEST_BYTES + 500_000,
+  onError: (c) => c.json({ error: `request body is over ${MAX_MANIFEST_BYTES} bytes; send packages[] instead` }, 413),
+});
+
+app.post('/api/v1/check', checkGate, capBody, async (c) => {
   let input: CheckInput;
   if ((c.req.header('content-type') ?? '').includes('application/json')) {
-    input = await c.req.json<CheckInput>().catch(() => ({}));
+    const parsed = checkSchema.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) return c.json({ error: 'body must be JSON with packages, manifest or actions' }, 400);
+    input = parsed.data;
   } else {
     // Raw lockfile body: curl --data-binary @package-lock.json ".../api/v1/check?filename=package-lock.json"
     input = { manifest: await c.req.text(), format: c.req.query('format') as Format | undefined, filename: c.req.query('filename') };
@@ -95,21 +113,18 @@ app.post('/api/v1/check', async (c) => {
   }
 });
 
-const site = (env: Env) => ({ name: env.SITE_NAME, url: env.SITE_URL, repo: env.REPO_URL });
-
 // Accepts both ?ecosystem=npm,PyPI and repeated ?ecosystem=npm&ecosystem=PyPI (what HTML forms send).
 function filtersFrom(c: Context<{ Bindings: Env }>) {
   const multi = (k: string) => (c.req.queries(k) ?? []).flatMap((v) => v.split(',')).filter(Boolean);
   return parseFilters({ ecosystem: multi('ecosystem'), kind: multi('kind'), tier: c.req.query('tier'), since: c.req.query('since'), limit: c.req.query('limit') });
 }
 
-app.post('/check', async (c) => {
+app.post('/check', checkGate, capBody, async (c) => {
   const body = await c.req.parseBody();
   const file = body.file instanceof File && body.file.size ? body.file : undefined;
   const manifest = file ? await file.text() : String(body.manifest ?? '');
   const format = String(body.format ?? '');
   const view = { manifest: file ? '' : manifest, format };
-  if (!(await allowed(c, 'CHECK_LIMIT'))) return c.html(checkPage({ ...view, error: 'Too many checks from your network. Try again in a minute.' }, site(c.env)), 429);
   if (!manifest.trim()) return c.html(checkPage({ ...view, error: 'Paste a lockfile or choose a file first.' }, site(c.env)), 400);
   try {
     const result = await checkDependencies(c.env, { manifest, format: (format || undefined) as Format | undefined, filename: file?.name });
@@ -186,7 +201,7 @@ app.get('/llms.txt', (c) => {
 
 ## Fields
 - tier: 1 act now, 2 elevated, 3 bulk typosquat malware (hidden by default)
-- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action
+- kind: exploited_vuln, malicious_package, compromised_package, poisoned_action. An exploited_vuln with kev null is an EPSS prediction, not observed exploitation
 - summary_source: "ai" summaries are generated from source text and can be wrong; "template" summaries are fixed wording
 `);
 });

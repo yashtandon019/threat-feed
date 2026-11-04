@@ -69,28 +69,38 @@ export function parsePackageLock(text: string): Parsed {
   return { packages: dedupe(pkgs), unresolved: [] };
 }
 
-/** pnpm keys: v9 `name@1.0.0`, v6 `/name@1.0.0`, v5 `/name/1.0.0`, each optionally with a `(peer@x)` suffix. */
+/** pnpm keys: v9 `name@1.0.0`, v6 `/name@1.0.0`, v5 `/name/1.0.0`, each optionally with a `(peer@x)` or v5 `_peer@x` suffix. */
 export function parsePnpmKey(key: string): Pkg | null {
-  const k = key.replace(/^\//, '').replace(/\(.*$/, '').replace(/_.*$/, '');
-  const at = k.lastIndexOf('@');
-  if (at > 0) return { ecosystem: 'npm', name: k.slice(0, at), version: k.slice(at + 1) };
-  const slash = k.lastIndexOf('/');
-  return slash > 0 ? { ecosystem: 'npm', name: k.slice(0, slash), version: k.slice(slash + 1) } : null;
+  const k = key.replace(/^\//, '').replace(/\(.*$/, '');
+  // v5 `name/1.0.0_peer@x` first; otherwise names can't contain '@' after a scope, so the first '@' past index 0 starts the version.
+  const v5 = k.match(/^((?:@[^/]+\/)?[^/@]+)\/(\d[^/]*)$/);
+  const at = k.indexOf('@', 1);
+  const [name, version] = v5 ? [v5[1], v5[2]] : at > 0 ? [k.slice(0, at), k.slice(at + 1)] : [];
+  return name && version ? { ecosystem: 'npm', name, version: version.replace(/_.*$/, '') } : null;
 }
 
 export function parsePnpmLock(text: string): Parsed {
   const lock = parseYaml(text) as { packages?: Record<string, unknown> };
-  const pkgs = Object.keys(lock.packages ?? {})
-    .map(parsePnpmKey)
-    .filter((p): p is Pkg => !!p && /^\d/.test(p.version));
-  return { packages: dedupe(pkgs), unresolved: [] };
+  const out: Parsed = { packages: [], unresolved: [] };
+  for (const key of Object.keys(lock.packages ?? {})) {
+    const p = parsePnpmKey(key);
+    if (p && /^\d/.test(p.version)) out.packages.push(p);
+    else out.unresolved.push({ entry: key, reason: 'not a registry package with an exact version' });
+  }
+  out.packages = dedupe(out.packages);
+  return out;
 }
 
 export function parseRequirements(text: string): Parsed {
   const out: Parsed = { packages: [], unresolved: [] };
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\s#.*$/, '').split(';')[0].trim();
-    if (!line || line.startsWith('#') || line.startsWith('-')) continue;
+    if (!line || line.startsWith('#')) continue;
+    if (/^(-r|-c|-e|--requirement|--constraint|--editable)\b/.test(line)) {
+      out.unresolved.push({ entry: line, reason: 'includes or editable installs are not followed; check that file or package separately' });
+      continue;
+    }
+    if (line.startsWith('-')) continue;
     const m = line.match(/^([A-Za-z0-9._-]+)(\[[^\]]*\])?\s*===?\s*([^\s,]+)$/);
     if (m) out.packages.push({ ecosystem: 'PyPI', name: m[1].toLowerCase(), version: m[3] });
     else out.unresolved.push({ entry: line, reason: 'not pinned with ==, so the installed version is unknown' });
@@ -116,19 +126,46 @@ export function parseGoSum(text: string): Parsed {
   return { packages: dedupe(pkgs), unresolved: [] };
 }
 
-/** Accepts `owner/repo@ref`, `owner/repo/path@ref` or `uses:` lines. Only exact semver tags can be matched. */
+/** Accepts `owner/repo@ref`, `owner/repo/path@ref` or `uses:` values. Only exact semver tags can be matched. */
 export function parseActions(lines: string[]): Parsed {
   const out: Parsed = { packages: [], unresolved: [] };
   for (const raw of lines) {
-    const m = raw.match(/([\w.-]+\/[\w.-]+)(?:\/[\w./-]*)?@([\w.-]+)/);
-    if (!m || raw.includes('docker://') || raw.trim().startsWith('./')) continue;
+    const ref0 = raw.replace(/(^|\s)#.*$/, '').trim().replace(/^-\s*/, '').replace(/^uses:\s*/, '').replace(/^(['"])(.*)\1$/, '$2');
+    if (!ref0 || ref0.startsWith('./') || ref0.startsWith('docker://')) continue;
+    const m = ref0.match(/^([\w.-]+\/[\w.-]+)(?:\/[^@\s]*)?@(\S+)$/);
+    if (!m) {
+      out.unresolved.push({ entry: ref0, reason: 'not an owner/repo@ref action reference' });
+      continue;
+    }
     const [, name, ref] = m;
-    if (/^v?\d+\.\d+\.\d+/.test(ref)) out.packages.push({ ecosystem: 'GitHub Actions', name, version: ref.replace(/^v/, '') });
+    if (/^v?\d+\.\d+\.\d+$/.test(ref)) out.packages.push({ ecosystem: 'GitHub Actions', name, version: ref.replace(/^v/, '') });
     else if (/^[0-9a-f]{40}$/.test(ref))
-      out.unresolved.push({ entry: raw.trim(), reason: 'commit SHA pins are not resolved to tags yet; check the threat list for this action manually' });
-    else out.unresolved.push({ entry: raw.trim(), reason: `"${ref}" is a moving tag or branch; pin an exact version or SHA to check it` });
+      out.unresolved.push({ entry: ref0, reason: 'commit SHA pins are not resolved to tags yet; check the threat list for this action manually' });
+    else out.unresolved.push({ entry: ref0, reason: `"${ref}" is a moving tag, branch or non-exact ref; pin an exact version or SHA to check it` });
   }
   out.packages = dedupe(out.packages);
+  return out;
+}
+
+/** Every `uses:` value in a workflow or action file; falls back to raw lines when the text isn't YAML. */
+function usesValues(text: string): string[] {
+  let doc: unknown;
+  try {
+    doc = parseYaml(text);
+  } catch {
+    return text.split('\n').filter((l) => l.includes('@'));
+  }
+  if (!doc || typeof doc !== 'object') return text.split('\n').filter((l) => l.includes('@'));
+  const out: string[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) n.forEach(walk);
+    else if (n && typeof n === 'object')
+      for (const [k, v] of Object.entries(n)) {
+        if (k === 'uses' && typeof v === 'string') out.push(v);
+        else walk(v);
+      }
+  };
+  walk(doc);
   return out;
 }
 
@@ -145,6 +182,6 @@ export function parseManifest(text: string, format: Format): Parsed {
     case 'go-sum':
       return parseGoSum(text);
     case 'actions':
-      return parseActions(text.split('\n').filter((l) => l.includes('@')));
+      return parseActions(usesValues(text));
   }
 }
