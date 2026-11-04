@@ -5,6 +5,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": { "crons": ["*/10 * * * *"] },
+  "routes": [{ "pattern": "compromised.live", "custom_domain": true }],
   "d1_databases": [
     {
       "binding": "DB",
@@ -15,8 +16,8 @@
   ],
   "vars": {
     "SUMMARY_MODEL": "claude-haiku-5-5",
-    "SITE_URL": "https://threat-feed.yashtandon019.workers.dev",
-    "SITE_NAME": "threat-feed"
+    "SITE_URL": "https://compromised.live",
+    "SITE_NAME": "compromised.live"
   },
   "observability": { "enabled": true }
 }
