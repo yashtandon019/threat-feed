@@ -15,6 +15,9 @@ export interface Site {
 const reportUrl = (site: Site, threatId?: string) =>
   `${site.repo}/issues/new?template=report.yml${threatId ? `&threat_id=${encodeURIComponent(threatId)}&title=${encodeURIComponent(`Report: ${threatId}`)}` : ''}`;
 
+/** Cracked padlock: brand orange on the header color. */
+export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#101820"/><path d="M21 28v-6a11 11 0 0 1 22 0v6" fill="none" stroke="#FB923C" stroke-width="5" stroke-linecap="round"/><rect x="14" y="28" width="36" height="25" rx="5" fill="#FB923C"/><path d="M33 31l-5 8 6 3-4 8" fill="none" stroke="#101820" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+
 const FONTS =
   'https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap';
 
@@ -190,6 +193,7 @@ function layout(title: string, site: Site, active: 'feed' | 'check' | 'about' | 
   const stale = status?.lastRun ? Date.now() - Date.parse(status.lastRun) > 40 * 60000 : true;
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title><meta name="description" content="Live feed of actively exploited vulnerabilities and malicious packages, with a dependency checker and MCP server.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><meta name="theme-color" content="#101820">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="${FONTS}">
 <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml"><link rel="alternate" type="application/atom+xml" title="Atom" href="/feed.atom">

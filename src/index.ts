@@ -5,7 +5,7 @@ import { timingSafeEqual } from 'hono/utils/buffer';
 import { CheckError, checkDependencies, type CheckInput } from './check';
 import { bulkMalwareCounts, getThreat, listThreats, parseFilters, sourceStatus } from './db';
 import { atom, jsonFeed, rss } from './feeds';
-import { aboutPage, checkPage, feedPage, threatPage } from './html';
+import { aboutPage, checkPage, FAVICON_SVG, feedPage, threatPage } from './html';
 import { runIngest } from './ingest';
 import { mcpFetch } from './mcp';
 import type { Format } from './parsers';
@@ -110,6 +110,10 @@ app.get('/', async (c) => {
 });
 
 app.get('/check', (c) => c.html(checkPage({ manifest: '', format: '' }, site(c.env))));
+
+app.get('/favicon.svg', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=604800' }));
+// Browsers still probe /favicon.ico; modern ones accept the SVG at that path.
+app.get('/favicon.ico', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=604800' }));
 
 app.get('/about', (c) => c.html(aboutPage(site(c.env))));
 
